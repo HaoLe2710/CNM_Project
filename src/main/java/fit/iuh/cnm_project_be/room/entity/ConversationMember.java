@@ -1,5 +1,6 @@
 package fit.iuh.cnm_project_be.room.entity;
 
+import fit.iuh.cnm_project_be.room.enums.MemberRole;
 import jakarta.persistence.*;
 import lombok.Getter;
 import lombok.Setter;

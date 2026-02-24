@@ -1,5 +1,6 @@
 package fit.iuh.cnm_project_be.user.entity;
 
+import fit.iuh.cnm_project_be.user.enums.FriendRequestStatus;
 import jakarta.persistence.*;
 import lombok.Getter;
 import lombok.Setter;
