@@ -1,10 +1,6 @@
-version: "3.9"
-
 services:
   postgres:
-    build:
-      context: .
-      dockerfile: postgres/Dockerfile
+    image: postgres:16-alpine
     container_name: chat-postgres
     ports:
       - "5432:5432"

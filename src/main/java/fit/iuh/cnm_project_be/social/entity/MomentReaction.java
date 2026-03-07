@@ -1,5 +1,6 @@
 package fit.iuh.cnm_project_be.social.entity;
 
+import fit.iuh.cnm_project_be.social.enums.ReactionType;
 import jakarta.persistence.*;
 import lombok.Getter;
 import lombok.Setter;

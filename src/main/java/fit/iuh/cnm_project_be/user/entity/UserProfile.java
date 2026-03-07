@@ -1,5 +1,6 @@
 package fit.iuh.cnm_project_be.user.entity;
 
+import fit.iuh.cnm_project_be.common.entity.BaseEntity;
 import jakarta.persistence.*;
 import lombok.*;
 import org.hibernate.annotations.SQLDelete;
@@ -14,7 +15,7 @@ import java.util.UUID;
 @AllArgsConstructor
 @Builder
 @SQLDelete(sql = "UPDATE user_profiles SET deleted_at = now() WHERE user_id = ?")
-public class UserProfile {
+public class UserProfile extends BaseEntity {
 
     @Id
     @Column(name = "user_id")
