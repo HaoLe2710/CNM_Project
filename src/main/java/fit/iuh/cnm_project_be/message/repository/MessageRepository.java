@@ -12,4 +12,6 @@ public interface MessageRepository
     List<Message> findByConversationIdAndDeletedAtIsNullOrderByCreatedAtDesc(UUID conversationId);
 
     List<Message> findTop50ByConversationIdAndDeletedAtIsNullOrderByCreatedAtDesc(UUID conversationId);
+
+    List<Message> findByConversationIdAndDeletedAtIsNullOrderByCreatedAtAsc(UUID conversationId);
 }
