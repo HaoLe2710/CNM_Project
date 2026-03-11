@@ -18,12 +18,16 @@ public class FriendRequest {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
+    @Column(name = "sender_id", nullable = false)
     private UUID senderId;
+    @Column(name = "receiver_id", nullable = false)
     private UUID receiverId;
 
+    @Column(name = "status", nullable = false)
     @Enumerated(EnumType.STRING)
     private FriendRequestStatus status;
 
+    @Column(name = "created_at", nullable = false)
     private Instant createdAt = Instant.now();
     private Instant updatedAt;
 }

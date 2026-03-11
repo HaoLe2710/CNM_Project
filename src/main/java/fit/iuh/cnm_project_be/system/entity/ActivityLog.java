@@ -17,10 +17,12 @@ public class ActivityLog {
     private Long id;
 
     private UUID userId;
+    @Column(name = "action", nullable = false)
     private String action;
 
     @Column(columnDefinition = "jsonb")
     private String metadata;
 
+    @Column(name = "created_at", nullable = false)
     private Instant createdAt = Instant.now();
 }

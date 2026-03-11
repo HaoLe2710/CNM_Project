@@ -21,13 +21,16 @@ public class Message extends BaseEntity {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
+    @Column(name = "conversation_id", nullable = false)
     private UUID conversationId;
+    @Column(name = "sender_id", nullable = false)
     private UUID senderId;
 
     @Column(columnDefinition = "text")
     private String content;
 
     @Enumerated(EnumType.STRING)
+    @Column(name = "message_type", nullable = false)
     private MessageType messageType;
 
     private Long replyTo;

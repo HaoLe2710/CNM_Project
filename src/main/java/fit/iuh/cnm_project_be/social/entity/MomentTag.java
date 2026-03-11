@@ -15,6 +15,8 @@ public class MomentTag {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
+    @Column(name = "moment_id", nullable = false)
     private UUID momentId;
+    @Column(name = "tagged_user_id", nullable = false)
     private UUID taggedUserId;
 }

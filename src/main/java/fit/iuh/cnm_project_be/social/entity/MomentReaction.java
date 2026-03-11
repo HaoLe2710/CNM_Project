@@ -17,11 +17,15 @@ public class MomentReaction {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
+    @Column(name = "moment_id", nullable = false)
     private UUID momentId;
+    @Column(name = "user_id", nullable = false)
     private UUID userId;
 
     @Enumerated(EnumType.STRING)
+    @Column(name = "reaction_type", nullable = false)
     private ReactionType reactionType;
 
+    @Column(name = "created_at", nullable = false)
     private Instant createdAt = Instant.now();
 }

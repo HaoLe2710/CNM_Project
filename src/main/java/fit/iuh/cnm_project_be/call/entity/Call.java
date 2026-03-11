@@ -18,18 +18,24 @@ public class Call {
     @GeneratedValue
     private UUID id;
 
+    @Column(name = "caller_id", nullable = false)
     private UUID callerId;
+    @Column(name = "callee_id", nullable = false)
     private UUID calleeId;
 
+    @Column(name = "channel", nullable = false)
     private String channel;
 
     @Enumerated(EnumType.STRING)
+    @Column(name = "status", nullable = false)
     private CallStatus status;
 
     @Enumerated(EnumType.STRING)
     private CallType type;
 
+    @Column(name = "started_at", nullable = false)
     private Instant startedAt = Instant.now();
     private Instant endedAt;
+    @Column(name = "created_at", nullable = false)
     private Instant createdAt = Instant.now();
 }

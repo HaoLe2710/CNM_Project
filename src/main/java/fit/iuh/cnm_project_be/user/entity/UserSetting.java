@@ -14,13 +14,16 @@ import java.util.UUID;
 public class UserSetting {
 
     @Id
+    @Column(name = "user_id", nullable = false)
     private UUID userId;
 
     @Id
+    @Column(name = "key", nullable = false)
     private String key;
 
     @Column(columnDefinition = "jsonb")
     private String value;
 
+    @Column(name = "updated_at", nullable = false)
     private Instant updatedAt = Instant.now();
 }
