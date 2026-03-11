@@ -19,9 +19,11 @@ public class PostComment extends BaseEntity {
     @GeneratedValue
     private UUID id;
 
+    @Column(name = "post_id", nullable = false)
     private UUID postId;
+    @Column(name = "user_id", nullable = false)
     private UUID userId;
 
-    @Column(columnDefinition = "text")
+    @Column(columnDefinition = "text", nullable = false )
     private String content;
 }

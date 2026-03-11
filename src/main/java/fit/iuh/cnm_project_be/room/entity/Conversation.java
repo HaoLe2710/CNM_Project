@@ -25,7 +25,9 @@ public class Conversation extends BaseEntity {
     private String name;
 
     @Enumerated(EnumType.STRING)
+    @Column(name = "type", nullable = false)
     private ConversationType type;
 
+    @Column(name = "creator_id", nullable = false)
     private UUID creatorId;
 }

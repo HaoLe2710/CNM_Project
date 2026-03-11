@@ -16,11 +16,13 @@ public class AiMessage {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
+    @Column(name = "user_id", nullable = false)
     private UUID userId;
 
+    @Column(name = "role", nullable = false)
     private String role;
 
-    @Column(columnDefinition = "text")
+    @Column(columnDefinition = "text", nullable = false)
     private String content;
 
     private Instant createdAt = Instant.now();

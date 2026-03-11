@@ -19,7 +19,9 @@ public class Friendship extends BaseEntity {
     @GeneratedValue
     private UUID id;
 
+    @Column(name = "user_id", nullable = false)
     private UUID userId;
+    @Column(name = "friend_id", nullable = false)
     private UUID friendId;
 
 }

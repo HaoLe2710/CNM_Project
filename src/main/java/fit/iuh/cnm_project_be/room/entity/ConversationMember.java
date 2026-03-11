@@ -16,13 +16,17 @@ import java.util.UUID;
 public class ConversationMember {
 
     @Id
+    @Column(name = "conversation_id", nullable = false)
     private UUID conversationId;
 
     @Id
+    @Column(name = "user_id", nullable = false)
     private UUID userId;
 
     @Enumerated(EnumType.STRING)
+    @Column(name = "role", nullable = false)
     private MemberRole role;
 
+    @Column(name = "joined_at", nullable = false)
     private Instant joinedAt = Instant.now();
 }

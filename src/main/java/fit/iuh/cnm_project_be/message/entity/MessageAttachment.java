@@ -15,11 +15,14 @@ public class MessageAttachment {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
+    @Column(name = "message_id", nullable = false)
     private Long messageId;
-
+    @Column(name = "file_url", nullable = false)
     private String fileUrl;
+//    @Column(name = "file_type", nullable = false)
     private String fileType;
     private Long fileSize;
 
+    @Column(name = "created_at", nullable = false)
     private Instant createdAt = Instant.now();
 }

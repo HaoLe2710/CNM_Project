@@ -16,7 +16,9 @@ public class PostLike {
     @GeneratedValue
     private UUID id;
 
+    @Column(name = "post_id", nullable = false)
     private UUID postId;
+    @Column(name = "user_id", nullable = false)
     private UUID userId;
 
     private Instant createdAt = Instant.now();

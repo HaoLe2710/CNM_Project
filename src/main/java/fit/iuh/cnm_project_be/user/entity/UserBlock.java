@@ -16,11 +16,14 @@ public class UserBlock {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
+    @Column(name = "blocker_id", nullable = false)
     private UUID blockerId;
+    @Column(name = "blocked_id", nullable = false)
     private UUID blockedId;
 
     private String reason;
 
+    @Column(name = "created_at", nullable = false)
     private Instant createdAt = Instant.now();
     private Instant deletedAt;
 }

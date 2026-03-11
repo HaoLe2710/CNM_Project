@@ -18,7 +18,8 @@ CREATE TABLE user_profiles (
                                phone TEXT,
                                banned_until TIMESTAMPTZ,
                                created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-                               updated_at TIMESTAMPTZ
+                               updated_at TIMESTAMPTZ,
+                               deleted_at TIMESTAMPTZ
 );
 
 CREATE TABLE friend_requests (

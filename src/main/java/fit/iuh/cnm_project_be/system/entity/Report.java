@@ -17,11 +17,14 @@ public class Report {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
+    @Column(name = "reporter_id", nullable = false)
     private UUID reporterId;
 
     @Enumerated(EnumType.STRING)
+    @Column(name = "target_type", nullable = false)
     private ReportTargetType targetType;
 
+    @Column(name = "target_id", nullable = false)
     private String targetId;
     private String reason;
 
@@ -30,6 +33,7 @@ public class Report {
 
     private String actionTaken;
 
+    @Column(name = "created_at", nullable = false)
     private Instant createdAt = Instant.now();
     private Instant resolvedAt;
 }
