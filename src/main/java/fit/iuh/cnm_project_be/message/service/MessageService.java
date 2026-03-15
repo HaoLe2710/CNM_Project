@@ -87,4 +87,28 @@ public class MessageService {
                 .createdAt(message.getCreatedAt())
                 .build();
     }
+
+    @Transactional
+    public void updateStatus(Long messageId, UUID userId, MessageDeliveryStatus status) {
+        if (!messageRepository.existsById(messageId)) {
+            throw new NotFoundException("Message not found");
+        }
+
+        MessageStatus messageStatus = messageStatusRepository
+                .findByMessageIdAndUserId(messageId, userId)
+                .orElseGet(() -> {
+                    MessageStatus newStatus = new MessageStatus();
+                    newStatus.setMessageId(messageId);
+                    newStatus.setUserId(userId);
+                    return newStatus;
+                });
+
+        messageStatus.setStatus(status);
+        messageStatusRepository.save(messageStatus);
+
+        messagingTemplate.convertAndSend(
+                "/topic/messages/" + messageId + "/status",
+                status
+        );
+    }
 }

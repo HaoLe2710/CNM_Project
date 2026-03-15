@@ -3,6 +3,7 @@ package fit.iuh.cnm_project_be.message.controller;
 import fit.iuh.cnm_project_be.common.api.ApiResponse;
 import fit.iuh.cnm_project_be.message.dto.MessageDto;
 import fit.iuh.cnm_project_be.message.dto.SendMessageRequest;
+import fit.iuh.cnm_project_be.message.enums.MessageDeliveryStatus;
 import fit.iuh.cnm_project_be.message.service.MessageService;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
@@ -41,5 +42,18 @@ public class MessageController {
         List<MessageDto> messages = messageService.getMessages(conversationId, page, size);
 
         return ApiResponse.ok(messages, UUID.randomUUID().toString());
+    }
+
+    @PatchMapping("/{messageId}/status")
+    public ApiResponse<Void> updateStatus(
+            @PathVariable Long messageId,
+            @RequestParam MessageDeliveryStatus status) {
+
+        // O day sau nay se lay tu Token/Session
+        UUID currentUserId = UUID.randomUUID();
+
+        messageService.updateStatus(messageId, currentUserId, status);
+
+        return ApiResponse.ok(null, UUID.randomUUID().toString());
     }
 }
