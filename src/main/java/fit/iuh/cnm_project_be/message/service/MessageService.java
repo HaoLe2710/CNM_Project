@@ -4,6 +4,7 @@ import fit.iuh.cnm_project_be.common.exception.NotFoundException;
 import fit.iuh.cnm_project_be.message.dto.MessageDto;
 import fit.iuh.cnm_project_be.message.dto.SendMessageRequest;
 import fit.iuh.cnm_project_be.message.entity.Message;
+import fit.iuh.cnm_project_be.message.enums.MessageType;
 import fit.iuh.cnm_project_be.message.repository.MessageRepository;
 import fit.iuh.cnm_project_be.room.repository.ConversationRepository;
 import lombok.RequiredArgsConstructor;
@@ -20,9 +21,6 @@ public class MessageService {
     private final MessageRepository messageRepository;
     private final ConversationRepository conversationRepository;
 
-    /**
-     * Send message
-     */
     @Transactional
     public MessageDto sendMessage(UUID senderId, SendMessageRequest request) {
 
@@ -35,15 +33,13 @@ public class MessageService {
         message.setConversationId(request.getConversationId());
         message.setSenderId(senderId);
         message.setContent(request.getContent());
+        message.setMessageType(MessageType.TEXT);
 
         Message saved = messageRepository.save(message);
 
         return mapToDto(saved);
     }
 
-    /**
-     * Get conversation messages
-     */
     @Transactional(readOnly = true)
     public List<MessageDto> getMessages(UUID conversationId) {
 
@@ -55,9 +51,6 @@ public class MessageService {
                 .toList();
     }
 
-    /**
-     * Delete message (soft delete)
-     */
     @Transactional
     public void deleteMessage(Long messageId, UUID userId) {
 
@@ -71,9 +64,6 @@ public class MessageService {
         messageRepository.delete(message);
     }
 
-    /**
-     * Mapper
-     */
     private MessageDto mapToDto(Message message) {
         return MessageDto.builder()
                 .id(message.getId())
