@@ -24,7 +24,7 @@ public class MessageController {
             @Valid @RequestBody SendMessageRequest request,
             HttpServletRequest http) {
 
-        UUID senderId = UUID.randomUUID(); // mock user
+        UUID senderId = UUID.randomUUID();
 
         MessageDto message = messageService.sendMessage(senderId, request);
 
@@ -34,9 +34,11 @@ public class MessageController {
     @GetMapping("/{conversationId}")
     public ApiResponse<List<MessageDto>> getMessages(
             @PathVariable UUID conversationId,
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "50") int size,
             HttpServletRequest http) {
 
-        List<MessageDto> messages = messageService.getMessages(conversationId);
+        List<MessageDto> messages = messageService.getMessages(conversationId, page, size);
 
         return ApiResponse.ok(messages, UUID.randomUUID().toString());
     }

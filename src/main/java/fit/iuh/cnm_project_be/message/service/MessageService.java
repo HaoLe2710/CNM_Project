@@ -8,6 +8,8 @@ import fit.iuh.cnm_project_be.message.enums.MessageType;
 import fit.iuh.cnm_project_be.message.repository.MessageRepository;
 import fit.iuh.cnm_project_be.room.repository.ConversationRepository;
 import lombok.RequiredArgsConstructor;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -23,13 +25,11 @@ public class MessageService {
 
     @Transactional
     public MessageDto sendMessage(UUID senderId, SendMessageRequest request) {
-
         if (!conversationRepository.existsById(request.getConversationId())) {
             throw new NotFoundException("Conversation not found");
         }
 
         Message message = new Message();
-
         message.setConversationId(request.getConversationId());
         message.setSenderId(senderId);
         message.setContent(request.getContent());
@@ -41,10 +41,11 @@ public class MessageService {
     }
 
     @Transactional(readOnly = true)
-    public List<MessageDto> getMessages(UUID conversationId) {
+    public List<MessageDto> getMessages(UUID conversationId, int page, int size) {
+        Pageable pageable = PageRequest.of(page, size);
 
-        List<Message> messages =
-                messageRepository.findByConversationIdAndDeletedAtIsNullOrderByCreatedAtAsc(conversationId);
+        List<Message> messages = messageRepository
+                .findByConversationIdAndDeletedAtIsNullOrderByCreatedAtDesc(conversationId, pageable);
 
         return messages.stream()
                 .map(this::mapToDto)
@@ -53,7 +54,6 @@ public class MessageService {
 
     @Transactional
     public void deleteMessage(Long messageId, UUID userId) {
-
         Message message = messageRepository.findById(messageId)
                 .orElseThrow(() -> new NotFoundException("Message not found"));
 
