@@ -4,13 +4,22 @@ import fit.iuh.cnm_project_be.common.exception.NotFoundException;
 import fit.iuh.cnm_project_be.message.dto.MessageDto;
 import fit.iuh.cnm_project_be.message.dto.SendMessageRequest;
 import fit.iuh.cnm_project_be.message.entity.Message;
+import fit.iuh.cnm_project_be.message.entity.MessageStatus;
+import fit.iuh.cnm_project_be.message.enums.MessageDeliveryStatus;
+import fit.iuh.cnm_project_be.message.enums.MessageType;
 import fit.iuh.cnm_project_be.message.repository.MessageRepository;
+import fit.iuh.cnm_project_be.message.repository.MessageStatusRepository;
 import fit.iuh.cnm_project_be.room.repository.ConversationRepository;
 import lombok.RequiredArgsConstructor;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Slice;
+import org.springframework.data.domain.Sort;
+import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.util.List;
+import java.time.ZonedDateTime;
 import java.util.UUID;
 
 @Service
@@ -18,62 +27,73 @@ import java.util.UUID;
 public class MessageService {
 
     private final MessageRepository messageRepository;
+    private final MessageStatusRepository messageStatusRepository;
     private final ConversationRepository conversationRepository;
+    private final SimpMessagingTemplate messagingTemplate;
 
-    /**
-     * Send message
-     */
     @Transactional
     public MessageDto sendMessage(UUID senderId, SendMessageRequest request) {
-
         if (!conversationRepository.existsById(request.getConversationId())) {
             throw new NotFoundException("Conversation not found");
         }
 
         Message message = new Message();
-
         message.setConversationId(request.getConversationId());
         message.setSenderId(senderId);
         message.setContent(request.getContent());
-
+        message.setMessageType(MessageType.TEXT);
         Message saved = messageRepository.save(message);
 
-        return mapToDto(saved);
+        MessageStatus status = new MessageStatus();
+        status.setMessageId(saved.getId());
+        status.setUserId(senderId);
+        status.setStatus(MessageDeliveryStatus.SENT);
+        messageStatusRepository.save(status);
+
+        MessageDto response = mapToDto(saved);
+        messagingTemplate.convertAndSend("/topic/conversations/" + request.getConversationId(), response);
+
+        return response;
     }
 
-    /**
-     * Get conversation messages
-     */
     @Transactional(readOnly = true)
-    public List<MessageDto> getMessages(UUID conversationId) {
-
-        List<Message> messages =
-                messageRepository.findByConversationIdAndDeletedAtIsNullOrderByCreatedAtAsc(conversationId);
-
-        return messages.stream()
-                .map(this::mapToDto)
-                .toList();
+    public Slice<MessageDto> getMessages(UUID conversationId, int page) {
+        Pageable pageable = PageRequest.of(page, 50, Sort.by("createdAt").descending());
+        return messageRepository.findByConversationIdAndDeletedAtIsNull(conversationId, pageable)
+                .map(this::mapToDto);
     }
 
-    /**
-     * Delete message (soft delete)
-     */
     @Transactional
     public void deleteMessage(Long messageId, UUID userId) {
-
         Message message = messageRepository.findById(messageId)
                 .orElseThrow(() -> new NotFoundException("Message not found"));
 
         if (!message.getSenderId().equals(userId)) {
-            throw new RuntimeException("You cannot delete this message");
+            throw new RuntimeException("Permission denied");
         }
 
-        messageRepository.delete(message);
+        message.setDeletedAt(ZonedDateTime.now().toInstant());
+        messageRepository.save(message);
     }
 
-    /**
-     * Mapper
-     */
+    @Transactional
+    public void updateStatus(Long messageId, UUID userId, MessageDeliveryStatus status) {
+        if (!messageRepository.existsById(messageId)) throw new NotFoundException("Message not found");
+
+        MessageStatus msgStatus = messageStatusRepository.findByMessageIdAndUserId(messageId, userId)
+                .orElseGet(() -> {
+                    MessageStatus ns = new MessageStatus();
+                    ns.setMessageId(messageId);
+                    ns.setUserId(userId);
+                    return ns;
+                });
+
+        msgStatus.setStatus(status);
+        messageStatusRepository.save(msgStatus);
+
+        messagingTemplate.convertAndSend("/topic/messages/" + messageId + "/status", status);
+    }
+
     private MessageDto mapToDto(Message message) {
         return MessageDto.builder()
                 .id(message.getId())
