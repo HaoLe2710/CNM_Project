@@ -13,11 +13,13 @@ import fit.iuh.cnm_project_be.room.repository.ConversationRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Slice;
+import org.springframework.data.domain.Sort;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.util.List;
+import java.time.ZonedDateTime;
 import java.util.UUID;
 
 @Service
@@ -40,42 +42,56 @@ public class MessageService {
         message.setSenderId(senderId);
         message.setContent(request.getContent());
         message.setMessageType(MessageType.TEXT);
-
         Message saved = messageRepository.save(message);
 
         MessageStatus status = new MessageStatus();
         status.setMessageId(saved.getId());
         status.setUserId(senderId);
         status.setStatus(MessageDeliveryStatus.SENT);
-
         messageStatusRepository.save(status);
 
         MessageDto response = mapToDto(saved);
-
-        messagingTemplate.convertAndSend(
-                "/topic/conversations/" + request.getConversationId(),
-                response
-        );
+        messagingTemplate.convertAndSend("/topic/conversations/" + request.getConversationId(), response);
 
         return response;
     }
 
     @Transactional(readOnly = true)
-    public List<MessageDto> getMessages(UUID conversationId, int page, int size) {
-        Pageable pageable = PageRequest.of(page, size);
-        List<Message> messages = messageRepository
-                .findByConversationIdAndDeletedAtIsNullOrderByCreatedAtDesc(conversationId, pageable);
-        return messages.stream().map(this::mapToDto).toList();
+    public Slice<MessageDto> getMessages(UUID conversationId, int page) {
+        Pageable pageable = PageRequest.of(page, 50, Sort.by("createdAt").descending());
+        return messageRepository.findByConversationIdAndDeletedAtIsNull(conversationId, pageable)
+                .map(this::mapToDto);
     }
 
     @Transactional
     public void deleteMessage(Long messageId, UUID userId) {
         Message message = messageRepository.findById(messageId)
                 .orElseThrow(() -> new NotFoundException("Message not found"));
+
         if (!message.getSenderId().equals(userId)) {
-            throw new RuntimeException("You cannot delete this message");
+            throw new RuntimeException("Permission denied");
         }
-        messageRepository.delete(message);
+
+        message.setDeletedAt(ZonedDateTime.now().toInstant());
+        messageRepository.save(message);
+    }
+
+    @Transactional
+    public void updateStatus(Long messageId, UUID userId, MessageDeliveryStatus status) {
+        if (!messageRepository.existsById(messageId)) throw new NotFoundException("Message not found");
+
+        MessageStatus msgStatus = messageStatusRepository.findByMessageIdAndUserId(messageId, userId)
+                .orElseGet(() -> {
+                    MessageStatus ns = new MessageStatus();
+                    ns.setMessageId(messageId);
+                    ns.setUserId(userId);
+                    return ns;
+                });
+
+        msgStatus.setStatus(status);
+        messageStatusRepository.save(msgStatus);
+
+        messagingTemplate.convertAndSend("/topic/messages/" + messageId + "/status", status);
     }
 
     private MessageDto mapToDto(Message message) {
@@ -86,29 +102,5 @@ public class MessageService {
                 .content(message.getContent())
                 .createdAt(message.getCreatedAt())
                 .build();
-    }
-
-    @Transactional
-    public void updateStatus(Long messageId, UUID userId, MessageDeliveryStatus status) {
-        if (!messageRepository.existsById(messageId)) {
-            throw new NotFoundException("Message not found");
-        }
-
-        MessageStatus messageStatus = messageStatusRepository
-                .findByMessageIdAndUserId(messageId, userId)
-                .orElseGet(() -> {
-                    MessageStatus newStatus = new MessageStatus();
-                    newStatus.setMessageId(messageId);
-                    newStatus.setUserId(userId);
-                    return newStatus;
-                });
-
-        messageStatus.setStatus(status);
-        messageStatusRepository.save(messageStatus);
-
-        messagingTemplate.convertAndSend(
-                "/topic/messages/" + messageId + "/status",
-                status
-        );
     }
 }

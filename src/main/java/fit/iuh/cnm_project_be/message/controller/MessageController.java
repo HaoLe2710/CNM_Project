@@ -3,14 +3,15 @@ package fit.iuh.cnm_project_be.message.controller;
 import fit.iuh.cnm_project_be.common.api.ApiResponse;
 import fit.iuh.cnm_project_be.message.dto.MessageDto;
 import fit.iuh.cnm_project_be.message.dto.SendMessageRequest;
+import fit.iuh.cnm_project_be.message.dto.TypingRequest;
 import fit.iuh.cnm_project_be.message.enums.MessageDeliveryStatus;
 import fit.iuh.cnm_project_be.message.service.MessageService;
-import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
+import org.springframework.data.domain.Slice;
+import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.web.bind.annotation.*;
 
-import java.util.List;
 import java.util.UUID;
 
 @RestController
@@ -19,40 +20,39 @@ import java.util.UUID;
 public class MessageController {
 
     private final MessageService messageService;
+    private final SimpMessagingTemplate messagingTemplate;
 
     @PostMapping
     public ApiResponse<MessageDto> sendMessage(
             @Valid @RequestBody SendMessageRequest request,
-            HttpServletRequest http) {
-
-        UUID senderId = UUID.randomUUID();
-
-        MessageDto message = messageService.sendMessage(senderId, request);
-
-        return ApiResponse.ok(message, UUID.randomUUID().toString());
+            @RequestHeader("x-user-id") UUID currentUserId) {
+        return ApiResponse.ok(messageService.sendMessage(currentUserId, request), UUID.randomUUID().toString());
     }
 
     @GetMapping("/{conversationId}")
-    public ApiResponse<List<MessageDto>> getMessages(
+    public ApiResponse<Slice<MessageDto>> getMessages(
             @PathVariable UUID conversationId,
-            @RequestParam(defaultValue = "0") int page,
-            @RequestParam(defaultValue = "50") int size,
-            HttpServletRequest http) {
-
-        List<MessageDto> messages = messageService.getMessages(conversationId, page, size);
-
-        return ApiResponse.ok(messages, UUID.randomUUID().toString());
+            @RequestParam(defaultValue = "0") int page) {
+        return ApiResponse.ok(messageService.getMessages(conversationId, page), UUID.randomUUID().toString());
     }
 
     @PatchMapping("/{messageId}/status")
     public ApiResponse<Void> updateStatus(
             @PathVariable Long messageId,
-            @RequestParam MessageDeliveryStatus status) {
-
-        // O day sau nay se lay tu Token/Session
-        UUID currentUserId = UUID.randomUUID();
-
+            @RequestParam MessageDeliveryStatus status,
+            @RequestHeader("x-user-id") UUID currentUserId) {
         messageService.updateStatus(messageId, currentUserId, status);
+        return ApiResponse.ok(null, UUID.randomUUID().toString());
+    }
+
+    @PostMapping("/typing/{conversationId}")
+    public ApiResponse<Void> sendTypingIndicator(
+            @PathVariable UUID conversationId,
+            @RequestParam boolean isTyping,
+            @RequestHeader("x-user-id") UUID currentUserId) {
+
+        TypingRequest payload = new TypingRequest(currentUserId, isTyping);
+        messagingTemplate.convertAndSend("/topic/typing/" + conversationId, payload);
 
         return ApiResponse.ok(null, UUID.randomUUID().toString());
     }
