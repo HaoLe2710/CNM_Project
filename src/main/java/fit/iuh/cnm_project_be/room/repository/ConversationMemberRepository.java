@@ -10,7 +10,7 @@ import java.util.UUID;
 public interface ConversationMemberRepository
         extends BaseRepository<ConversationMember, ConversationMemberId> {
 
-    List<ConversationMember> findByUserId(UUID userId);
+    List<ConversationMember> findByConversationId(UUID conversationId);
 
     boolean existsByConversationIdAndUserId(UUID conversationId, UUID userId);
 }

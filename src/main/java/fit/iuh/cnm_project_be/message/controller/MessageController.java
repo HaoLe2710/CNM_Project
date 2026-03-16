@@ -56,4 +56,12 @@ public class MessageController {
 
         return ApiResponse.ok(null, UUID.randomUUID().toString());
     }
+
+    @PatchMapping("/mark-seen/{conversationId}")
+    public ApiResponse<Void> markAsSeen(
+            @PathVariable UUID conversationId,
+            @RequestHeader("x-user-id") UUID currentUserId) {
+        messageService.markAsSeen(conversationId, currentUserId);
+        return ApiResponse.ok(null, UUID.randomUUID().toString());
+    }
 }

@@ -9,6 +9,8 @@ import fit.iuh.cnm_project_be.message.enums.MessageDeliveryStatus;
 import fit.iuh.cnm_project_be.message.enums.MessageType;
 import fit.iuh.cnm_project_be.message.repository.MessageRepository;
 import fit.iuh.cnm_project_be.message.repository.MessageStatusRepository;
+import fit.iuh.cnm_project_be.room.dto.ConversationStatusPayload;
+import fit.iuh.cnm_project_be.room.repository.ConversationMemberRepository;
 import fit.iuh.cnm_project_be.room.repository.ConversationRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.PageRequest;
@@ -20,6 +22,8 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.ZonedDateTime;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.UUID;
 
 @Service
@@ -29,6 +33,7 @@ public class MessageService {
     private final MessageRepository messageRepository;
     private final MessageStatusRepository messageStatusRepository;
     private final ConversationRepository conversationRepository;
+    private final ConversationMemberRepository conversationMemberRepository;
     private final SimpMessagingTemplate messagingTemplate;
 
     @Transactional
@@ -51,7 +56,12 @@ public class MessageService {
         messageStatusRepository.save(status);
 
         MessageDto response = mapToDto(saved);
+
         messagingTemplate.convertAndSend("/topic/conversations/" + request.getConversationId(), response);
+
+        conversationMemberRepository.findByConversationId(request.getConversationId()).forEach(member -> {
+            messagingTemplate.convertAndSend("/topic/users/" + member.getUserId() + "/conversations", response);
+        });
 
         return response;
     }
@@ -94,6 +104,15 @@ public class MessageService {
         messagingTemplate.convertAndSend("/topic/messages/" + messageId + "/status", status);
     }
 
+    @Transactional
+    public void markAsSeen(UUID conversationId, UUID userId) {
+        messageStatusRepository.markAllAsSeen(conversationId, userId);
+
+        ConversationStatusPayload payload = new ConversationStatusPayload(conversationId, "SEEN");
+
+        messagingTemplate.convertAndSend("/topic/users/" + userId + "/conversations/status", payload);
+    }
+
     private MessageDto mapToDto(Message message) {
         return MessageDto.builder()
                 .id(message.getId())
@@ -103,4 +122,6 @@ public class MessageService {
                 .createdAt(message.getCreatedAt())
                 .build();
     }
+
+
 }
