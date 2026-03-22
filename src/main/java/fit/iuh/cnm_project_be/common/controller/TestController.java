@@ -4,7 +4,7 @@ import com.fasterxml.jackson.annotation.JsonAlias;
 import fit.iuh.cnm_project_be.common.api.ApiResponse;
 import fit.iuh.cnm_project_be.common.exception.BusinessException;
 import fit.iuh.cnm_project_be.common.exception.NotFoundException;
-import fit.iuh.cnm_project_be.jwt.JwtUtils;
+import fit.iuh.cnm_project_be.auth.utils.JwtUtils;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;

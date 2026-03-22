@@ -7,13 +7,25 @@ import com.nimbusds.jose.jwk.RSAKey;
 import com.nimbusds.jose.jwk.source.ImmutableJWKSet;
 import com.nimbusds.jose.jwk.source.JWKSource;
 import com.nimbusds.jose.proc.SecurityContext;
+import fit.iuh.cnm_project_be.auth.entity.Account;
+import fit.iuh.cnm_project_be.auth.enums.Role;
+import fit.iuh.cnm_project_be.auth.repository.AccountRepository;
+import fit.iuh.cnm_project_be.user.entity.UserProfile;
+import fit.iuh.cnm_project_be.user.repository.UserProfileRepository;
+import org.springframework.boot.CommandLineRunner;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.security.config.Customizer;
 import org.springframework.security.config.annotation.method.configuration.EnableMethodSecurity;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
+import org.springframework.security.config.annotation.web.configurers.AbstractHttpConfigurer;
+import org.springframework.security.core.authority.SimpleGrantedAuthority;
+import org.springframework.security.core.userdetails.User;
+import org.springframework.security.core.userdetails.UserDetailsService;
+import org.springframework.security.core.userdetails.UsernameNotFoundException;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
+import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.security.oauth2.jwt.JwtDecoder;
 import org.springframework.security.oauth2.jwt.JwtEncoder;
 import org.springframework.security.oauth2.jwt.NimbusJwtDecoder;
@@ -26,6 +38,9 @@ import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.security.interfaces.RSAPrivateKey;
 import java.security.interfaces.RSAPublicKey;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.UUID;
 
 @Configuration
 @EnableMethodSecurity
@@ -34,14 +49,15 @@ public class SecurityConfig {
     private static final String PUBLIC_KEY_PATH = "certs/public_key.pem";
 
     private static final String[] PUBLIC_END_POINT = {
-            "/api/v1/test/**"
+            "/api/v1/test/**",
+            "/api/v1/auth/**",
     };
 
     @Bean
     public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
 
         http
-            .csrf(csrf -> csrf.disable())
+            .csrf(AbstractHttpConfigurer::disable)
             .authorizeHttpRequests(auth -> auth
                 .requestMatchers(PUBLIC_END_POINT).permitAll()
                 .anyRequest().authenticated()
@@ -111,5 +127,48 @@ public class SecurityConfig {
         try (InputStream inputStream = new ClassPathResource(classpathFile).getInputStream()) {
             return StreamUtils.copyToString(inputStream, StandardCharsets.UTF_8);
         }
+    }
+
+    @Bean
+    public UserDetailsService userDetailsService(AccountRepository accountRepository) {
+        return username -> {
+            Account account = accountRepository.findByUsername(username)
+                    .orElseThrow(() -> new UsernameNotFoundException("User not found"));
+
+            return User.builder()
+                    .username(account.getUsername())
+                    .password(account.getPassword())
+                    .authorities(account.getRoles().stream()
+                            .map(role -> new SimpleGrantedAuthority("ROLE_" + role.name()))
+                            .toList())
+                    .build();
+        };
+    }
+
+    @Bean
+    CommandLineRunner initDatabase(AccountRepository accountRepository, PasswordEncoder passwordEncoder, UserProfileRepository userProfileRepository) {
+        UUID userId = UUID.randomUUID();
+        return args -> {
+            if (accountRepository.findByUsername("admin").isEmpty()) {
+                Account adminAccount = Account.builder()
+                        .userId(userId)
+                        .username("admin")
+                        .password(passwordEncoder.encode("@Admin123"))
+                        .roles(List.of(Role.ADMIN, Role.USER))
+                        .build();
+
+                accountRepository.save(adminAccount);
+
+                UserProfile adminProfile = UserProfile.builder()
+                        .userId(userId)
+                        .username("admin")
+                        .displayName("Admin")
+                        .build();
+
+                userProfileRepository.save(adminProfile);
+
+                System.out.println(">>> SecurityConfig: Created default admin account with password: @Admin123");
+            }
+        };
     }
 }

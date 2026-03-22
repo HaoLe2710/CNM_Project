@@ -1,5 +1,6 @@
-package fit.iuh.cnm_project_be.jwt;
+package fit.iuh.cnm_project_be.auth.utils;
 
+import fit.iuh.cnm_project_be.auth.entity.Account;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.security.oauth2.jose.jws.SignatureAlgorithm;
@@ -12,8 +13,11 @@ import org.springframework.security.oauth2.jwt.JwsHeader;
 import org.springframework.stereotype.Component;
 
 import java.time.Instant;
+import java.time.LocalDateTime;
 import java.time.temporal.ChronoUnit;
 import java.util.Map;
+import java.util.UUID;
+import java.util.stream.Collectors;
 
 @Component
 @Slf4j
@@ -48,24 +52,47 @@ public class JwtUtils {
         return claims != null ? (String) claims.get("sub") : null;
     }
 
-//    tao token
-    public String generateToken(String userName) {
+//    lay thoi gian het han
+    public LocalDateTime getExpiresIn(String token) {
+        try {
+            Instant expiresAt = jwtDecoder.decode(token).getExpiresAt();
+            return expiresAt != null ?
+                    LocalDateTime.ofInstant(expiresAt, java.time.ZoneId.systemDefault()) : null;
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+//  tao refresh token
+    public String generateRefreshToken() {
+        return UUID.randomUUID().toString();
+    }
+
+//    tao  access token
+    public String generateToken(Account account) {
         try {
             Instant now = Instant.now();
+
+            String scope = account.getRoles().stream()
+                    .map(Enum::name)
+                    .collect(Collectors.joining(" "));
+
             JwsHeader jwsHeader = JwsHeader.with(SignatureAlgorithm.RS256).build();
 
             JwtClaimsSet jwtClaimsSet = JwtClaimsSet.builder()
-                    .subject(userName)
                     .issuer(issuer)
                     .issuedAt(now)
                     .expiresAt(now.plus(1, ChronoUnit.HOURS))
+                    .subject(account.getUsername())
+                    .claim("userId", account.getUserId().toString())
+                    .claim("scope", scope)
                     .build();
 
             return jwtEncoder
                     .encode(JwtEncoderParameters.from(jwsHeader, jwtClaimsSet))
                     .getTokenValue();
         } catch (Exception e) {
-            log.error("JwtUtils: Error when sign Token: {}", e.getMessage());
+            log.error("JwtUtils: Error when sign Token for user: {}: {}", account.getUsername(), e.getMessage());
             throw new RuntimeException("Could not generate token", e);
         }
     }
