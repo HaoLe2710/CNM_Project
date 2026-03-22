@@ -1,13 +1,41 @@
 package fit.iuh.cnm_project_be.config;
 
+import com.nimbusds.jose.JOSEException;
+import com.nimbusds.jose.jwk.JWK;
+import com.nimbusds.jose.jwk.JWKSet;
+import com.nimbusds.jose.jwk.RSAKey;
+import com.nimbusds.jose.jwk.source.ImmutableJWKSet;
+import com.nimbusds.jose.jwk.source.JWKSource;
+import com.nimbusds.jose.proc.SecurityContext;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.core.io.ClassPathResource;
 import org.springframework.security.config.Customizer;
+import org.springframework.security.config.annotation.method.configuration.EnableMethodSecurity;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
+import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
+import org.springframework.security.oauth2.jwt.JwtDecoder;
+import org.springframework.security.oauth2.jwt.JwtEncoder;
+import org.springframework.security.oauth2.jwt.NimbusJwtDecoder;
+import org.springframework.security.oauth2.jwt.NimbusJwtEncoder;
 import org.springframework.security.web.SecurityFilterChain;
+import org.springframework.util.StreamUtils;
+
+import java.io.IOException;
+import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
+import java.security.interfaces.RSAPrivateKey;
+import java.security.interfaces.RSAPublicKey;
 
 @Configuration
+@EnableMethodSecurity
 public class SecurityConfig {
+    private static final String PRIVATE_KEY_PATH = "certs/private_key.pem";
+    private static final String PUBLIC_KEY_PATH = "certs/public_key.pem";
+
+    private static final String[] PUBLIC_END_POINT = {
+            "/api/v1/test/**"
+    };
 
     @Bean
     public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
@@ -15,11 +43,73 @@ public class SecurityConfig {
         http
             .csrf(csrf -> csrf.disable())
             .authorizeHttpRequests(auth -> auth
-                .requestMatchers("/api/v1/test/**").permitAll()
+                .requestMatchers(PUBLIC_END_POINT).permitAll()
                 .anyRequest().authenticated()
+            )
+
+            .oauth2ResourceServer(oauth2 -> oauth2
+                    .jwt(Customizer.withDefaults())
             )
             .httpBasic(Customizer.withDefaults());
 
         return http.build();
+    }
+
+//    Tong hop 2 key vao context de quan ly va lay ra moi khi can, khong can doc file pem lai
+    @Bean
+    public RSAKey rsaJwk() throws IOException, JOSEException {
+        String privatePem = readPem(PRIVATE_KEY_PATH);
+        String publicPem = readPem(PUBLIC_KEY_PATH);
+
+        RSAKey privateRsa = (RSAKey) JWK.parseFromPEMEncodedObjects(privatePem);
+        RSAKey publicRsa = (RSAKey) JWK.parseFromPEMEncodedObjects(publicPem);
+
+        return new RSAKey.Builder(publicRsa.toRSAPublicKey())
+                .privateKey(privateRsa.toRSAPrivateKey())
+                .build();
+    }
+
+//    lay private key tu context
+    @Bean
+    public RSAPrivateKey rsaPrivateKey(RSAKey rsaJwk) throws JOSEException {
+        return rsaJwk.toRSAPrivateKey();
+    }
+
+//    lay public key tu context
+    @Bean
+    public RSAPublicKey rsaPublicKey(RSAKey rsaJwk) throws JOSEException {
+        return rsaJwk.toRSAPublicKey();
+    }
+
+//    giai ma token
+    @Bean
+    public JwtDecoder jwtDecoder(RSAPublicKey rsaPublicKey) {
+        return NimbusJwtDecoder
+                .withPublicKey(rsaPublicKey)
+                .build();
+    }
+
+//bao mat, chuyen thong tin user thanh token
+    @Bean
+    JwtEncoder jwtEncoder(RSAPublicKey rsaPublicKey, RSAPrivateKey rsaPrivateKey) {
+        RSAKey rsa = new RSAKey.Builder(rsaPublicKey)
+                .privateKey(rsaPrivateKey)
+                .build();
+
+        JWKSource<SecurityContext> jwtks = new ImmutableJWKSet<>(new JWKSet(rsa));
+        return new NimbusJwtEncoder(jwtks);
+    }
+
+//    ma hoa password cua user, tranh lo thong tin
+    @Bean
+    public BCryptPasswordEncoder passwordEncoder() {
+        return new BCryptPasswordEncoder();
+    }
+
+//    doc file pem
+    private String readPem(String classpathFile) throws IOException {
+        try (InputStream inputStream = new ClassPathResource(classpathFile).getInputStream()) {
+            return StreamUtils.copyToString(inputStream, StandardCharsets.UTF_8);
+        }
     }
 }
