@@ -25,15 +25,19 @@ public class Account extends BaseEntity {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     long id;
 
-    @Column(unique = true)
+    @Column(unique = true, nullable = false)
     String username;
 
-    @Column(unique = true, name = "user_id")
+    @Column(unique = true, name = "user_id", nullable = false)
     private UUID userId;
 
     @NotBlank(message = "Password can not be empty")
+    @Column(nullable = false)
     String password;
 
+    @ElementCollection(fetch = FetchType.EAGER)
+    @CollectionTable(name = "account_roles", joinColumns = @JoinColumn(name = "account_id", referencedColumnName = "id"))
+    @Column(name = "role", nullable = false)
     @Enumerated(EnumType.STRING)
     List<Role> roles;
 }

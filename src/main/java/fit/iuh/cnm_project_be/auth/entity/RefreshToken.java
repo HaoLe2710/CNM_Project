@@ -23,7 +23,7 @@ public class RefreshToken {
     @Column(nullable = false)
     LocalDateTime expiryDate;
 
-    @ManyToOne()
-    @JoinColumn(name = "account_id", referencedColumnName = "id")
+    @ManyToOne(fetch = FetchType.LAZY, optional = false)
+    @JoinColumn(name = "account_id", referencedColumnName = "id", nullable = false)
     Account account;
 }
