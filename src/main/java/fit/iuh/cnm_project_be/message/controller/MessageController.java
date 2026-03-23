@@ -1,15 +1,21 @@
 package fit.iuh.cnm_project_be.message.controller;
 
 import fit.iuh.cnm_project_be.common.api.ApiResponse;
-import fit.iuh.cnm_project_be.message.dto.MessageDto;
+import fit.iuh.cnm_project_be.message.dto.CursorPageResponse;
+import fit.iuh.cnm_project_be.message.dto.EditMessageRequest;
+import fit.iuh.cnm_project_be.message.dto.MessageReactionRequest;
+import fit.iuh.cnm_project_be.message.dto.MessageResponse;
 import fit.iuh.cnm_project_be.message.dto.SendMessageRequest;
 import fit.iuh.cnm_project_be.message.dto.TypingRequest;
+import fit.iuh.cnm_project_be.message.dto.UploadAttachmentResponse;
+import fit.iuh.cnm_project_be.realtime.dto.RealtimeEvent;
+import fit.iuh.cnm_project_be.realtime.dto.RealtimeEventType;
 import fit.iuh.cnm_project_be.message.enums.MessageDeliveryStatus;
 import fit.iuh.cnm_project_be.message.service.MessageService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
-import org.springframework.data.domain.Slice;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
+import org.springframework.web.multipart.MultipartFile;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.UUID;
@@ -23,17 +29,27 @@ public class MessageController {
     private final SimpMessagingTemplate messagingTemplate;
 
     @PostMapping
-    public ApiResponse<MessageDto> sendMessage(
+    public ApiResponse<MessageResponse> sendMessage(
             @Valid @RequestBody SendMessageRequest request,
             @RequestHeader("x-user-id") UUID currentUserId) {
         return ApiResponse.ok(messageService.sendMessage(currentUserId, request), UUID.randomUUID().toString());
     }
 
     @GetMapping("/{conversationId}")
-    public ApiResponse<Slice<MessageDto>> getMessages(
+    public ApiResponse<CursorPageResponse<MessageResponse>> getMessages(
             @PathVariable UUID conversationId,
-            @RequestParam(defaultValue = "0") int page) {
-        return ApiResponse.ok(messageService.getMessages(conversationId, page), UUID.randomUUID().toString());
+            @RequestParam(required = false) String cursor,
+            @RequestParam(defaultValue = "50") int size,
+            @RequestHeader("x-user-id") UUID currentUserId) {
+        return ApiResponse.ok(messageService.getMessages(conversationId, currentUserId, cursor, size), UUID.randomUUID().toString());
+    }
+
+    @PatchMapping("/{messageId}")
+    public ApiResponse<MessageResponse> editMessage(
+            @PathVariable Long messageId,
+            @Valid @RequestBody EditMessageRequest request,
+            @RequestHeader("x-user-id") UUID currentUserId) {
+        return ApiResponse.ok(messageService.editMessage(messageId, currentUserId, request), UUID.randomUUID().toString());
     }
 
     @PatchMapping("/{messageId}/status")
@@ -51,8 +67,10 @@ public class MessageController {
             @RequestParam boolean isTyping,
             @RequestHeader("x-user-id") UUID currentUserId) {
 
+        messageService.assertConversationAccess(conversationId, currentUserId);
         TypingRequest payload = new TypingRequest(currentUserId, isTyping);
-        messagingTemplate.convertAndSend("/topic/typing/" + conversationId, payload);
+        messagingTemplate.convertAndSend("/topic/typing/" + conversationId,
+                RealtimeEvent.of(RealtimeEventType.TYPING_UPDATED, payload));
 
         return ApiResponse.ok(null, UUID.randomUUID().toString());
     }
@@ -63,5 +81,53 @@ public class MessageController {
             @RequestHeader("x-user-id") UUID currentUserId) {
         messageService.markAsSeen(conversationId, currentUserId);
         return ApiResponse.ok(null, UUID.randomUUID().toString());
+    }
+
+    @DeleteMapping("/{messageId}")
+    public ApiResponse<Void> deleteMessage(
+            @PathVariable Long messageId,
+            @RequestHeader("x-user-id") UUID currentUserId) {
+        messageService.deleteMessage(messageId, currentUserId);
+        return ApiResponse.ok(null, UUID.randomUUID().toString());
+    }
+
+    @PutMapping("/{messageId}/reaction")
+    public ApiResponse<Void> addOrUpdateReaction(
+            @PathVariable Long messageId,
+            @Valid @RequestBody MessageReactionRequest request,
+            @RequestHeader("x-user-id") UUID currentUserId) {
+        messageService.addOrUpdateReaction(messageId, currentUserId, request);
+        return ApiResponse.ok(null, UUID.randomUUID().toString());
+    }
+
+    @DeleteMapping("/{messageId}/reaction")
+    public ApiResponse<Void> removeReaction(
+            @PathVariable Long messageId,
+            @RequestHeader("x-user-id") UUID currentUserId) {
+        messageService.removeReaction(messageId, currentUserId);
+        return ApiResponse.ok(null, UUID.randomUUID().toString());
+    }
+
+    @PostMapping("/{messageId}/hide")
+    public ApiResponse<Void> hideMessage(
+            @PathVariable Long messageId,
+            @RequestHeader("x-user-id") UUID currentUserId) {
+        messageService.hideMessage(messageId, currentUserId);
+        return ApiResponse.ok(null, UUID.randomUUID().toString());
+    }
+
+    @PatchMapping("/{messageId}/remove-for-me")
+    public ApiResponse<Void> removeMessageForMe(
+            @PathVariable Long messageId,
+            @RequestHeader("x-user-id") UUID currentUserId) {
+        messageService.removeMessageForMe(messageId, currentUserId);
+        return ApiResponse.ok(null, UUID.randomUUID().toString());
+    }
+
+    @PostMapping("/attachments/upload")
+    public ApiResponse<UploadAttachmentResponse> uploadAttachment(
+            @RequestParam("file") MultipartFile file,
+            @RequestHeader("x-user-id") UUID currentUserId) {
+        return ApiResponse.ok(messageService.uploadAttachment(currentUserId, file), UUID.randomUUID().toString());
     }
 }

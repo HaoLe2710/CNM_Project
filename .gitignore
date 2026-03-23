@@ -60,4 +60,7 @@ docker/**/volumes/
 logs/
 *.log
 
+docker
 
+
+.gitnexus

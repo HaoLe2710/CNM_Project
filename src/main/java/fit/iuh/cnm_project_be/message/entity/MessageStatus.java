@@ -1,6 +1,7 @@
 package fit.iuh.cnm_project_be.message.entity;
 
 import fit.iuh.cnm_project_be.message.enums.MessageDeliveryStatus;
+import fit.iuh.cnm_project_be.message.persistence.MessageDeliveryStatusConverter;
 import jakarta.persistence.*;
 import lombok.Getter;
 import lombok.Setter;
@@ -23,8 +24,8 @@ public class MessageStatus {
     @Column(name = "user_id", nullable = false)
     private UUID userId;
 
-    @Enumerated(EnumType.STRING)
     @Column(name = "status", nullable = false)
+    @Convert(converter = MessageDeliveryStatusConverter.class)
     private MessageDeliveryStatus status;
 
     @Column(name = "updated_at", nullable = false)

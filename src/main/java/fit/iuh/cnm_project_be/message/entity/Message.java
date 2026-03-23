@@ -2,6 +2,7 @@ package fit.iuh.cnm_project_be.message.entity;
 
 import fit.iuh.cnm_project_be.common.entity.BaseEntity;
 import fit.iuh.cnm_project_be.message.enums.MessageType;
+import fit.iuh.cnm_project_be.message.persistence.MessageTypeConverter;
 import jakarta.persistence.*;
 import lombok.Getter;
 import lombok.Setter;
@@ -29,10 +30,24 @@ public class Message extends BaseEntity {
     @Column(columnDefinition = "text")
     private String content;
 
-    @Enumerated(EnumType.STRING)
     @Column(name = "message_type", nullable = false)
+    @Convert(converter = MessageTypeConverter.class)
     private MessageType messageType;
 
-    private Long replyTo;
+    @Column(name = "reply_to")
+    private Long replyToMessageId;
+
+    @Column(name = "reply_to_sender_id")
+    private UUID replyToSenderId;
+
+    @Column(name = "reply_to_content_preview", columnDefinition = "text")
+    private String replyToContentPreview;
+
+    @Column(name = "reply_to_type")
+    @Convert(converter = MessageTypeConverter.class)
+    private MessageType replyToType;
+
+    @Column(name = "edited_at")
+    private Instant editedAt;
 
 }
