@@ -1,106 +1,54 @@
-# 🚀 Pull Request: Call Feature Integration (Voice/Video Call + FCM)
+# 🚀 Pull Request: Call Feature Integration & Security Hardening
 
 ## 📌 Summary
-Bản cập nhật này triển khai bước đầu tính năng **gọi điện (Call)** trong hệ thống, bao gồm việc khởi tạo cuộc gọi, xử lý logic backend và gửi thông báo đến người nhận thông qua Firebase Cloud Messaging (FCM).
-
-Tính năng này đóng vai trò nền tảng cho việc phát triển các chức năng realtime như **Voice Call / Video Call** trong tương lai.
+Bản cập nhật này triển khai nền tảng cho tính năng **gọi điện (Call)** và tích hợp **Firebase Cloud Messaging (FCM)** để gửi thông báo thời gian thực. Đồng thời, thực hiện các bước bảo mật quan trọng cho mã nguồn.
 
 ### Các thành phần chính:
-- **Call API**: Endpoint khởi tạo cuộc gọi giữa các user.
-- **Call Service**: Xử lý logic nghiệp vụ liên quan đến cuộc gọi.
-- **FCM Integration**: Gửi push notification khi có cuộc gọi đến.
-- **Firebase Configuration**: Kết nối với Firebase để hỗ trợ notification.
+- **Call Module**: Khởi tạo và quản lý thực thể cuộc gọi (Controller, Service, Entity).
+- **FCM Integration**: Tích hợp Firebase Admin SDK để gửi Push Notification.
+- **Database Migration**: Cập nhật schema để lưu trữ `fcm_token` của người dùng.
+- **Security & Git Policy**: Chặn file cấu hình nhạy cảm và cập nhật phân quyền truy cập.
 
 ---
 
 ## 🎯 Purpose / Motivation
-
-### Tại sao cần thay đổi này?
-
-1. **Hỗ trợ giao tiếp realtime**
-    - Cho phép user bắt đầu cuộc gọi trực tiếp trong hệ thống.
-
-2. **Cải thiện trải nghiệm người dùng**
-    - Người nhận nhận được thông báo ngay lập tức khi có cuộc gọi đến.
-
-3. **Xây dựng nền tảng cho WebRTC**
-    - Chuẩn bị cho các bước tiếp theo:
-        - Signaling server
-        - Video call / voice call
-        - Call lifecycle (accept / reject / end)
+- **Real-time Signaling**: Cung cấp API khởi tạo cuộc gọi, làm tiền đề cho việc tích hợp WebRTC (Voice/Video) trong tương lai.
+- **User Engagement**: Đảm bảo người nhận nhận được thông báo cuộc gọi đến ngay cả khi ứng dụng đang chạy ngầm.
+- **Security Compliance**: Loại bỏ hoàn toàn file credentials (`firebase-service-account.json`) khỏi lịch sử Git để tránh rò rỉ bảo mật.
 
 ---
 
 ## 🔧 Changes
 
-### 1. Backend - Call Module
+### 1. Backend - Call Module & Notification
+- [x] **`CallController.java`**: Endpoint xử lý yêu cầu khởi tạo cuộc gọi từ Client.
+- [x] **`Call.java`**: Entity định nghĩa cấu trúc dữ liệu cho một cuộc gọi.
+- [x] **`CallService.java`**: Logic nghiệp vụ điều phối thông tin cuộc gọi.
+- [x] **`FCMService.java`**: Xử lý việc gửi thông báo đẩy đến thiết bị người nhận qua FCM.
 
-- [x] **`CallController.java`**
-    - Cung cấp API để khởi tạo cuộc gọi
-    - Nhận request từ client và chuyển xuống service xử lý
-
-- [x] **`CallService.java`**
-    - Xử lý logic chính:
-        - Xác định người gọi và người nhận
-        - Tạo dữ liệu cuộc gọi (nếu cần)
-        - Gửi yêu cầu notification qua FCM
-
-- [x] **`CallResponse.java`**
-    - DTO trả về thông tin cuộc gọi cho client
-
-- [x] **`InitiateCallRequest.java`**
-    - DTO nhận dữ liệu từ client khi bắt đầu cuộc gọi
+### 2. Database & Security Updates
+- [x] **`V2__add_fcm_token_to_user_profiles.sql`**: Script Migration bổ sung cột `fcm_token` vào bảng profile người dùng.
+- [x] **`SecurityConfig.java`**: Cập nhật cấu hình bảo mật Spring Security để phân quyền cho các endpoint mới.
+- [x] **`.gitignore`**: Cập nhật quy tắc để chặn file cấu hình Firebase.
+- [x] **Git Tracking**: Thực hiện `git rm --cached` để ngừng theo dõi file nhạy cảm.
 
 ---
 
-### 2. Push Notification (Firebase Cloud Messaging)
-
-- [x] **`FCMService.java`**
-    - Thực hiện gửi push notification đến thiết bị người nhận
-    - Nội dung gửi bao gồm:
-        - Thông tin người gọi
-        - Loại cuộc gọi (voice/video)
-        - Metadata phục vụ signaling
-
-- [x] **`FirebaseConfig.java`**
-    - Cấu hình Firebase Admin SDK
-    - Load credentials từ file:
-      ```
-      firebase-service-account.json
-      ```
+## 🛡️ Security Note
+> [!IMPORTANT]
+> File `src/main/resources/firebase-service-account.json` đã được đưa vào danh sách chặn và xóa khỏi bộ nhớ đệm của Git.
+> **Lưu ý:** Các thành viên trong nhóm cần tự cấu hình file này tại máy cá nhân để chạy tính năng thông báo. Tuyệt đối không đẩy file này lên Repo.
 
 ---
 
-### 3. User Module (Related Updates)
+## 🧪 Testing Status
+- [ ] **Unit Tests**: Chưa thực hiện.
+- [ ] **Integration Tests**: Chưa thực hiện.
+- [ ] **End-to-End**: Chưa thực hiện.
 
-- [x] **`UserController.java`**
-    - Có điều chỉnh để hỗ trợ các API liên quan đến call (nếu cần)
-
-- [x] **`UserService.java`**
-    - Hỗ trợ truy xuất thông tin user phục vụ cho việc gọi
-
-- [x] **`UserProfile.java`**
-    - Có thể bổ sung các field:
-        - FCM Token (để nhận notification)
-        - Trạng thái user (online/offline)
+**Ghi chú:** Bản commit này tập trung vào cấu trúc code và tích hợp thư viện. Việc kiểm thử tính năng sẽ được tiến hành sau khi hoàn thiện môi trường Firebase Client.
 
 ---
-
-### 4. Configuration & Dependencies
-
-- [x] **`pom.xml`**
-    - Thêm dependency cho Firebase Admin SDK
-
-- [x] **`firebase-service-account.json`**
-    - File credentials để xác thực với Firebase
-
----
-
-## 🧪 Testing
-
-### Trạng thái hiện tại:
-- ❗ **Chưa thực hiện testing chính thức**
-
 
 ## 👨‍💻 Author
-**Hoàng - CNM Project Team**
+**PhamTangHoang_22691881**

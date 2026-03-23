@@ -60,4 +60,6 @@ docker/**/volumes/
 logs/
 *.log
 
+# Chặn file service account
+src/main/resources/firebase-service-account.json
 

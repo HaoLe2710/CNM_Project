@@ -20,12 +20,15 @@ public class CallController {
 
     private final CallService callService;
 
+    /**
+     * Tạo cuộc gọi.
+     */
     @PostMapping
     public ResponseEntity<CallResponse> initiateCall(
             @AuthenticationPrincipal Jwt jwt,
             @RequestBody InitiateCallRequest request) {
-        UUID callerId = UUID.fromString(jwt.getSubject());
-        return ResponseEntity.ok(callService.initiateCall(callerId, request));
+        UUID userId = UUID.fromString(jwt.getSubject());
+        return ResponseEntity.ok(callService.initiateCall(userId, request));
     }
 
     @PostMapping("/{callId}/accept")
