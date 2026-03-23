@@ -5,6 +5,7 @@ import fit.iuh.cnm_project_be.room.entity.ConversationMember;
 import fit.iuh.cnm_project_be.room.entity.ConversationMemberId;
 
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 
 public interface ConversationMemberRepository
@@ -12,5 +13,11 @@ public interface ConversationMemberRepository
 
     List<ConversationMember> findByConversationId(UUID conversationId);
 
+    Optional<ConversationMember> findByConversationIdAndUserId(UUID conversationId, UUID userId);
+
     boolean existsByConversationIdAndUserId(UUID conversationId, UUID userId);
+
+    long countByConversationId(UUID conversationId);
+
+    void deleteByConversationIdAndUserId(UUID conversationId, UUID userId);
 }

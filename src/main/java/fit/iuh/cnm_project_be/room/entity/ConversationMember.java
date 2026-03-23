@@ -1,6 +1,7 @@
 package fit.iuh.cnm_project_be.room.entity;
 
 import fit.iuh.cnm_project_be.room.enums.MemberRole;
+import fit.iuh.cnm_project_be.room.persistence.MemberRoleConverter;
 import jakarta.persistence.*;
 import lombok.Getter;
 import lombok.Setter;
@@ -23,8 +24,8 @@ public class ConversationMember {
     @Column(name = "user_id", nullable = false)
     private UUID userId;
 
-    @Enumerated(EnumType.STRING)
     @Column(name = "role", nullable = false)
+    @Convert(converter = MemberRoleConverter.class)
     private MemberRole role;
 
     @Column(name = "joined_at", nullable = false)
