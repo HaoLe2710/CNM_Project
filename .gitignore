@@ -61,3 +61,4 @@ logs/
 *.log
 
 
+/src/main/resources/certs/private_key.pem
