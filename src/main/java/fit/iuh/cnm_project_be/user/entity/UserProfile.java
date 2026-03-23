@@ -3,6 +3,8 @@ package fit.iuh.cnm_project_be.user.entity;
 import com.fasterxml.jackson.annotation.JsonIgnore;
 import fit.iuh.cnm_project_be.common.entity.BaseEntity;
 import jakarta.persistence.*;
+import jakarta.validation.constraints.Positive;
+import jakarta.validation.constraints.Size;
 import lombok.*;
 import org.hibernate.annotations.SQLDelete;
 
