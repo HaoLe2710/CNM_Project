@@ -42,4 +42,13 @@ public class UserService {
         user.setDeletedAt(Instant.now());
         userProfileRepository.save(user);
     }
+
+    // Trong UserService
+    @Transactional
+    public void updateFcmToken(UUID userId, String fcmToken) {
+        UserProfile user = getUser(userId);
+        user.setFcmToken(fcmToken);
+        userProfileRepository.save(user);
+    }
+
 }

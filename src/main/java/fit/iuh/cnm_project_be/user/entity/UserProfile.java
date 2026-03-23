@@ -36,6 +36,11 @@ public class UserProfile extends BaseEntity {
     private String bio;
     private String phone;
 
+    // Trong UserProfile entity
+    @Column(name = "fcm_token")
+    private String fcmToken;
+
+
     private Instant bannedUntil;
 
 }
