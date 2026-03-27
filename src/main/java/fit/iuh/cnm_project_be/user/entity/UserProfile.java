@@ -1,5 +1,6 @@
 package fit.iuh.cnm_project_be.user.entity;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import fit.iuh.cnm_project_be.common.entity.BaseEntity;
 import jakarta.persistence.*;
 import jakarta.validation.constraints.Positive;
@@ -38,6 +39,6 @@ public class UserProfile extends BaseEntity {
     private String bio;
     private String phone;
 
-    private Instant bannedUntil;
 
+    private Instant bannedUntil;
 }

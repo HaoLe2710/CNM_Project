@@ -3,6 +3,7 @@ package fit.iuh.cnm_project_be.room.entity;
 
 import fit.iuh.cnm_project_be.common.entity.BaseEntity;
 import fit.iuh.cnm_project_be.room.enums.ConversationType;
+import fit.iuh.cnm_project_be.room.persistence.ConversationTypeConverter;
 import jakarta.persistence.*;
 import lombok.Getter;
 import lombok.Setter;
@@ -24,8 +25,8 @@ public class Conversation extends BaseEntity {
 
     private String name;
 
-    @Enumerated(EnumType.STRING)
     @Column(name = "type", nullable = false)
+    @Convert(converter = ConversationTypeConverter.class)
     private ConversationType type;
 
     @Column(name = "creator_id", nullable = false)

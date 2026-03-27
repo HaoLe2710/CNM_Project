@@ -1,17 +1,45 @@
 package fit.iuh.cnm_project_be.message.repository;
 
 import fit.iuh.cnm_project_be.common.repository.SoftDeleteRepository;
+import org.springframework.data.jpa.repository.Query;
 import fit.iuh.cnm_project_be.message.entity.Message;
+import org.springframework.data.domain.Pageable;
+import org.springframework.stereotype.Repository;
+import org.springframework.data.repository.query.Param;
 
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 
-public interface MessageRepository
-        extends SoftDeleteRepository<Message, Long> {
-
-    List<Message> findByConversationIdAndDeletedAtIsNullOrderByCreatedAtDesc(UUID conversationId);
+@Repository
+public interface MessageRepository extends SoftDeleteRepository<Message, Long> {
+    @Query("""
+            select m from Message m
+            where m.conversationId = :conversationId
+              and m.deletedAt is null
+              and not exists (
+                    select 1 from MessageUserState state
+                    where state.messageId = m.id
+                      and state.userId = :userId
+                      and (state.hiddenAt is not null or state.deletedForMeAt is not null)
+              )
+              and (
+                    :cursorCreatedAt is null
+                    or m.createdAt < :cursorCreatedAt
+                    or (m.createdAt = :cursorCreatedAt and m.id < :cursorMessageId)
+              )
+            order by m.createdAt desc, m.id desc
+            """)
+    List<Message> findVisibleMessages(
+            @Param("conversationId") UUID conversationId,
+            @Param("userId") UUID userId,
+            @Param("cursorCreatedAt") java.time.Instant cursorCreatedAt,
+            @Param("cursorMessageId") Long cursorMessageId,
+            Pageable pageable);
 
     List<Message> findTop50ByConversationIdAndDeletedAtIsNullOrderByCreatedAtDesc(UUID conversationId);
 
     List<Message> findByConversationIdAndDeletedAtIsNullOrderByCreatedAtAsc(UUID conversationId);
+
+    Optional<Message> findByIdAndDeletedAtIsNull(Long id);
 }

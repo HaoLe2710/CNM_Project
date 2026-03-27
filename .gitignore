@@ -60,5 +60,8 @@ docker/**/volumes/
 logs/
 *.log
 
+docker
 
 /src/main/resources/certs/private_key.pem
+
+.gitnexus
