@@ -2,6 +2,7 @@ package fit.iuh.cnm_project_be.auth.controller;
 
 import fit.iuh.cnm_project_be.auth.dto.request.LoginRequest;
 import fit.iuh.cnm_project_be.auth.dto.request.RegisterRequest;
+import fit.iuh.cnm_project_be.auth.dto.request.ChangePasswordRequest;
 import fit.iuh.cnm_project_be.auth.dto.response.LoginResponse;
 import fit.iuh.cnm_project_be.auth.dto.response.TokenResponse;
 import fit.iuh.cnm_project_be.auth.service.AuthService;
@@ -93,4 +94,12 @@ public class AuthController {
 
         return ApiResponse.ok(loginResponse, requestId);
     }
+
+        @PutMapping("/change-password")
+        public ApiResponse<String> changePassword(
+                        @RequestBody @Valid ChangePasswordRequest request
+        ) {
+                authService.changePassword(request);
+                return ApiResponse.ok("Change password successfully", UUID.randomUUID().toString());
+        }
 }

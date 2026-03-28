@@ -22,7 +22,7 @@ public class RegisterRequest {
 
 	@NotBlank(message = "Password can not be empty")
 	@Pattern(
-			regexp = "^(?=.*[a-z])(?=.*[A-Z])(?=.*\\d)[a-zA-Z\\d]{6,50}$",
+			regexp = "^(?=.*[a-z])(?=.*[A-Z])(?=.*\\d).{6,50}$",
 			message = "Password must be 6-50 characters long and include uppercase, lowercase letters, and numbers"
 	)
 	String password;
