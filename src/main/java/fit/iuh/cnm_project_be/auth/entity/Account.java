@@ -17,7 +17,7 @@ import java.util.UUID;
 @Setter
 @Builder
 @FieldDefaults(level = AccessLevel.PRIVATE)
-@SQLDelete(sql = "UPDATE accounts SET deleted_at = now() WHERE user_id = ?")
+@SQLDelete(sql = "UPDATE accounts SET deleted_at = now() WHERE id = ?")
 @Entity
 @Table(name = "accounts")
 public class Account extends BaseEntity {

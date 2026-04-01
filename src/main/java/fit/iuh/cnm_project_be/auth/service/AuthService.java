@@ -2,6 +2,7 @@ package fit.iuh.cnm_project_be.auth.service;
 
 import fit.iuh.cnm_project_be.auth.dto.request.LoginRequest;
 import fit.iuh.cnm_project_be.auth.dto.request.RegisterRequest;
+import fit.iuh.cnm_project_be.auth.dto.request.ChangePasswordRequest;
 import fit.iuh.cnm_project_be.auth.dto.response.LoginResponse;
 import fit.iuh.cnm_project_be.auth.dto.response.RegisterResponse;
 import fit.iuh.cnm_project_be.auth.entity.Account;
@@ -11,6 +12,7 @@ import fit.iuh.cnm_project_be.common.exception.BusinessException;
 import fit.iuh.cnm_project_be.common.exception.NotFoundException;
 import fit.iuh.cnm_project_be.common.exception.UnauthorizedException;
 import fit.iuh.cnm_project_be.auth.utils.JwtUtils;
+import fit.iuh.cnm_project_be.user.service.UserService;
 import jakarta.servlet.http.Cookie;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
@@ -25,6 +27,7 @@ import org.springframework.security.core.Authentication;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -47,6 +50,7 @@ public class AuthService {
     RefreshTokenService refreshTokenService;
     PasswordEncoder passwordEncoder;
     JwtUtils  jwtUtils;
+    UserService userService;
 
     public LoginResponse login(LoginRequest request, HttpServletResponse httpServletResponse) {
         String username = request.getUsername();
@@ -109,6 +113,7 @@ public class AuthService {
         }
     }
 
+    @Transactional
     public RegisterResponse register(RegisterRequest request) {
         String username = request.getUsername().trim();
 
@@ -116,21 +121,89 @@ public class AuthService {
             throw new BusinessException("Username already exists");
         }
 
-        Account newAccount = Account.builder()
-                .username(username)
-                .userId(UUID.randomUUID())
-                .password(passwordEncoder.encode(request.getPassword()))
-                .roles(List.of(Role.USER))
-                .build();
+        UUID userId = UUID.randomUUID();
 
-        Account savedAccount = accountRepository.save(newAccount);
+        try {
+            Account newAccount = Account.builder()
+                    .username(username)
+                    .userId(userId)
+                    .password(passwordEncoder.encode(request.getPassword()))
+                    .roles(List.of(Role.USER))
+                    .build();
 
-        return RegisterResponse.builder()
-                .userId(savedAccount.getUserId())
-                .username(savedAccount.getUsername())
-                .createdAt(savedAccount.getCreatedAt())
-                .build();
+            Account savedAccount = accountRepository.save(newAccount);
+            userService.createProfileForAccount(savedAccount.getUserId(), savedAccount.getUsername());
+
+            return RegisterResponse.builder()
+                    .userId(savedAccount.getUserId())
+                    .username(savedAccount.getUsername())
+                    .createdAt(savedAccount.getCreatedAt())
+                    .build();
+        } catch (BusinessException ex) {
+            throw ex;
+        } catch (Exception ex) {
+            log.error("Register failed for username {}: {}", username, ex.getMessage(), ex);
+            throw new BusinessException("Register failed");
+        }
     }
 
+    @Transactional
+    public void softDeleteAccountByUserId(UUID userId) {
+        Account account = accountRepository.findByUserIdAndDeletedAtIsNull(userId)
+                .orElseThrow(() -> new NotFoundException("Account not found"));
+        accountRepository.delete(account);
+    }
+
+    @Transactional
+    public void softDeleteUserAndAccount(UUID userId) {
+        try {
+            userService.softDeleteUser(userId);
+            softDeleteAccountByUserId(userId);
+        } catch (BusinessException ex) {
+            throw ex;
+        } catch (Exception ex) {
+            log.error("Delete user/account failed for userId {}: {}", userId, ex.getMessage(), ex);
+            throw new BusinessException("Delete user/account failed");
+        }
+    }
+
+    @Transactional
+    public void changePassword(ChangePasswordRequest request) {
+        Account account = getCurrentAccount();
+
+        if (!passwordEncoder.matches(request.getCurrentPassword(), account.getPassword())) {
+            throw new UnauthorizedException("Current password is incorrect");
+        }
+
+        if (passwordEncoder.matches(request.getNewPassword(), account.getPassword())) {
+            throw new BusinessException("New password must be different from current password");
+        }
+
+        account.setPassword(passwordEncoder.encode(request.getNewPassword()));
+        accountRepository.save(account);
+        refreshTokenService.revokeAllForAccount(account.getId());
+    }
+
+    private Account getCurrentAccount() {
+        Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
+        if (authentication == null || !(authentication.getPrincipal() instanceof Jwt jwt)) {
+            throw new UnauthorizedException("Unauthenticated");
+        }
+
+        String userIdClaim = jwt.getClaimAsString("userId");
+        if (userIdClaim != null && !userIdClaim.isBlank()) {
+            UUID userId = UUID.fromString(userIdClaim);
+            return accountRepository.findByUserIdAndDeletedAtIsNull(userId)
+                    .orElseThrow(() -> new NotFoundException("Account not found"));
+        }
+
+        String username = jwt.getSubject();
+        if (username == null || username.isBlank()) {
+            throw new UnauthorizedException("Invalid token claims");
+        }
+
+        return accountRepository.findByUsername(username)
+                .orElseThrow(() -> new NotFoundException("Account not found"));
+    }
 
 }

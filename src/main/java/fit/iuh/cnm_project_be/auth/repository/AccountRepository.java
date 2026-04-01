@@ -5,9 +5,11 @@ import fit.iuh.cnm_project_be.common.repository.BaseRepository;
 import org.springframework.stereotype.Repository;
 
 import java.util.Optional;
+import java.util.UUID;
 
 @Repository
 public interface AccountRepository extends BaseRepository<Account, Long> {
     Optional<Account> findByUsername(String username);
     boolean existsAccountByUsername(String username);
+    Optional<Account> findByUserIdAndDeletedAtIsNull(UUID userId);
 }
