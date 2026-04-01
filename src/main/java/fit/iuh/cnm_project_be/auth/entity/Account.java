@@ -22,13 +22,12 @@ import java.util.UUID;
 @Table(name = "accounts")
 public class Account extends BaseEntity {
     @Id
-    @GeneratedValue(strategy = GenerationType.IDENTITY)
-    long id;
+    @GeneratedValue(strategy = GenerationType.UUID)
+    UUID id;
 
     @Column(unique = true, nullable = false)
     String username;
 
-    @Column(unique = true, name = "user_id", nullable = false)
     private UUID userId;
 
     @NotBlank(message = "Password can not be empty")
