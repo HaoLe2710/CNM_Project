@@ -1,6 +1,7 @@
 package fit.iuh.cnm_project_be.user.entity;
 
 import fit.iuh.cnm_project_be.user.enums.FriendRequestStatus;
+import fit.iuh.cnm_project_be.user.persistence.FriendRequestStatusConverter;
 import jakarta.persistence.*;
 import lombok.Getter;
 import lombok.Setter;
@@ -24,7 +25,8 @@ public class FriendRequest {
     private UUID receiverId;
 
     @Column(name = "status", nullable = false)
-    @Enumerated(EnumType.STRING)
+//    @Enumerated(EnumType.STRING)
+    @Convert(converter = FriendRequestStatusConverter.class)
     private FriendRequestStatus status;
 
     @Column(name = "created_at", nullable = false)

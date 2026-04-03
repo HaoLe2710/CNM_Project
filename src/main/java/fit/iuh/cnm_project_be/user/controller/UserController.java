@@ -3,21 +3,19 @@ package fit.iuh.cnm_project_be.user.controller;
 import fit.iuh.cnm_project_be.common.api.ApiResponse;
 import fit.iuh.cnm_project_be.user.dto.request.UpdateUserProfileRequest;
 import fit.iuh.cnm_project_be.user.dto.response.UserProfileResponse;
+import fit.iuh.cnm_project_be.user.dto.response.UserSearchResponse;
 import fit.iuh.cnm_project_be.user.entity.UserProfile;
 import fit.iuh.cnm_project_be.user.mapper.UserProfileMapper;
 import fit.iuh.cnm_project_be.auth.service.AuthService;
+import fit.iuh.cnm_project_be.user.service.FriendService;
 import fit.iuh.cnm_project_be.user.service.UserService;
 import jakarta.validation.Valid;
 import lombok.AccessLevel;
 import lombok.AllArgsConstructor;
 import lombok.experimental.FieldDefaults;
-import org.springframework.web.bind.annotation.DeleteMapping;
-import org.springframework.web.bind.annotation.GetMapping;
-import org.springframework.web.bind.annotation.PutMapping;
-import org.springframework.web.bind.annotation.RequestBody;
-import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.bind.annotation.*;
 
+import java.util.List;
 import java.util.UUID;
 
 @RestController
@@ -29,6 +27,8 @@ public class UserController {
     UserService userService;
     UserProfileMapper userProfileMapper;
     AuthService authService;
+    FriendService friendService;
+
 
     @GetMapping("/profile")
     public ApiResponse<UserProfileResponse> getUserProfile() {
@@ -56,4 +56,10 @@ public class UserController {
 
         return ApiResponse.ok("Delete user and account successfully", UUID.randomUUID().toString());
     }
+
+    @GetMapping("/search")
+    public ApiResponse<List<UserSearchResponse>> searchUsers(@RequestParam("q") String keyword) {
+        return ApiResponse.ok(friendService.searchUsers(keyword), UUID.randomUUID().toString());
+    }
+
 }

@@ -12,4 +12,7 @@ public interface FriendshipRepository
     List<Friendship> findByUserIdAndDeletedAtIsNull(UUID userId);
 
     boolean existsByUserIdAndFriendIdAndDeletedAtIsNull(UUID userId, UUID friendId);
+
+    List<Friendship> findByUserIdAndDeletedAtIsNullOrderByCreatedAtDesc(UUID userId);
+
 }
