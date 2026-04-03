@@ -69,4 +69,9 @@ public class RefreshTokenService {
         }
         refreshTokenRepository.deleteById(token);
     }
+
+    @Transactional
+    public void revokeAllForAccount(long accountId) {
+        refreshTokenRepository.deleteByAccountId(accountId);
+    }
 }
