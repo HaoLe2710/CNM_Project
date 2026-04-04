@@ -7,6 +7,7 @@ import jakarta.validation.constraints.Size;
 import lombok.*;
 import org.hibernate.annotations.SQLDelete;
 
+import java.time.LocalDate;
 import java.time.Instant;
 import java.util.UUID;
 
@@ -37,7 +38,8 @@ public class UserProfile extends BaseEntity {
     private String qrCodeUrl;
     private String bio;
     private String phone;
+    private String gender;
+    private LocalDate dob;
 
     private Instant bannedUntil;
-
 }

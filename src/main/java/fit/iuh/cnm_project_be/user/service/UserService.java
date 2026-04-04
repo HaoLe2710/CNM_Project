@@ -2,7 +2,6 @@ package fit.iuh.cnm_project_be.user.service;
 
 import fit.iuh.cnm_project_be.user.entity.UserProfile;
 import fit.iuh.cnm_project_be.user.dto.request.UpdateUserProfileRequest;
-import fit.iuh.cnm_project_be.user.mapper.UserProfileMapper;
 import fit.iuh.cnm_project_be.user.repository.UserProfileRepository;
 import fit.iuh.cnm_project_be.common.exception.NotFoundException;
 import fit.iuh.cnm_project_be.common.exception.BusinessException;
@@ -22,7 +21,6 @@ import java.util.UUID;
 public class UserService {
 
     private final UserProfileRepository userProfileRepository;
-    private final UserProfileMapper userProfileMapper;
 
     @Transactional(readOnly = true)
     public UserProfile getUser(UUID userId) {
@@ -53,7 +51,14 @@ public class UserService {
     @Transactional
     public UserProfile updateUserProfile(UpdateUserProfileRequest request) {
         UserProfile user = getMyProfile();
-        userProfileMapper.updateEntity(user, request);
+        user.setDisplayName(request.getDisplayName());
+        user.setFirstName(request.getFirstName());
+        user.setLastName(request.getLastName());
+        user.setAvatarUrl(request.getAvatarUrl());
+        user.setBio(request.getBio());
+        user.setPhone(request.getPhone());
+        user.setGender(request.getGender());
+        user.setDob(request.getDob());
         return userProfileRepository.save(user);
     }
 
@@ -66,7 +71,7 @@ public class UserService {
         UserProfile userProfile = UserProfile.builder()
                 .userId(userId)
                 .username(username)
-                .displayName(username)
+            .displayName(null)
                 .build();
 
         return userProfileRepository.save(userProfile);

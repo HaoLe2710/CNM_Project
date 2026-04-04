@@ -54,3 +54,7 @@ CREATE INDEX idx_refresh_tokens_account_id ON refresh_tokens (account_id);
 
 -- Re-enable foreign key checks
 SET CONSTRAINTS ALL IMMEDIATE;
+
+-- Add profile fields (not pushed yet, safe to modify V8)
+ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS gender VARCHAR(20);
+ALTER TABLE user_profiles ADD COLUMN IF NOT EXISTS dob DATE;

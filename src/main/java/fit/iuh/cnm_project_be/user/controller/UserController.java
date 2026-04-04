@@ -4,7 +4,6 @@ import fit.iuh.cnm_project_be.common.api.ApiResponse;
 import fit.iuh.cnm_project_be.user.dto.request.UpdateUserProfileRequest;
 import fit.iuh.cnm_project_be.user.dto.response.UserProfileResponse;
 import fit.iuh.cnm_project_be.user.entity.UserProfile;
-import fit.iuh.cnm_project_be.user.mapper.UserProfileMapper;
 import fit.iuh.cnm_project_be.auth.service.AuthService;
 import fit.iuh.cnm_project_be.user.service.UserService;
 import jakarta.validation.Valid;
@@ -27,13 +26,12 @@ import java.util.UUID;
 public class UserController {
 
     UserService userService;
-    UserProfileMapper userProfileMapper;
     AuthService authService;
 
     @GetMapping("/profile")
     public ApiResponse<UserProfileResponse> getUserProfile() {
         UserProfile profile = userService.getUserProfile();
-        UserProfileResponse response = userProfileMapper.toResponse(profile);
+        UserProfileResponse response = toResponse(profile);
 
         String requestId = UUID.randomUUID().toString();
         return ApiResponse.ok(response, requestId);
@@ -44,7 +42,7 @@ public class UserController {
             @Valid @RequestBody UpdateUserProfileRequest request
     ) {
         UserProfile profile = userService.updateUserProfile(request);
-        UserProfileResponse response = userProfileMapper.toResponse(profile);
+        UserProfileResponse response = toResponse(profile);
 
         return ApiResponse.ok(response, UUID.randomUUID().toString());
     }
@@ -55,5 +53,24 @@ public class UserController {
         authService.softDeleteUserAndAccount(profile.getUserId());
 
         return ApiResponse.ok("Delete user and account successfully", UUID.randomUUID().toString());
+    }
+
+    private UserProfileResponse toResponse(UserProfile profile) {
+        return UserProfileResponse.builder()
+                .userId(profile.getUserId())
+                .username(profile.getUsername())
+                .displayName(profile.getDisplayName())
+                .firstName(profile.getFirstName())
+                .lastName(profile.getLastName())
+                .avatarUrl(profile.getAvatarUrl())
+                .inviteLink(profile.getInviteLink())
+                .qrCodeUrl(profile.getQrCodeUrl())
+                .bio(profile.getBio())
+                .phone(profile.getPhone())
+                .gender(profile.getGender())
+                .dob(profile.getDob())
+                .createdAt(profile.getCreatedAt())
+                .updatedAt(profile.getUpdatedAt())
+                .build();
     }
 }

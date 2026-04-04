@@ -28,6 +28,7 @@ public class Account extends BaseEntity {
     @Column(unique = true, nullable = false)
     String username;
 
+    @Column(nullable = false, name = "user_id")
     private UUID userId;
 
     @NotBlank(message = "Password can not be empty")

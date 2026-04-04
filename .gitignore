@@ -62,3 +62,5 @@ logs/
 
 
 /src/main/resources/certs/private_key.pem
+/AGENTS.md
+/CLAUDE.md
