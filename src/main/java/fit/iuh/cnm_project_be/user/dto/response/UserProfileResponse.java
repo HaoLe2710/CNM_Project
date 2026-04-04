@@ -8,6 +8,7 @@ import lombok.NoArgsConstructor;
 import lombok.experimental.FieldDefaults;
 
 import java.time.Instant;
+import java.time.LocalDate;
 import java.util.UUID;
 
 @Getter
@@ -26,6 +27,8 @@ public class UserProfileResponse {
     String qrCodeUrl;
     String bio;
     String phone;
+    String gender;
+    LocalDate dob;
     Instant createdAt;
     Instant updatedAt;
 }

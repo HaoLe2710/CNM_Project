@@ -11,7 +11,10 @@ import fit.iuh.cnm_project_be.auth.entity.Account;
 import fit.iuh.cnm_project_be.auth.enums.Role;
 import fit.iuh.cnm_project_be.auth.repository.AccountRepository;
 import fit.iuh.cnm_project_be.user.entity.UserProfile;
+import fit.iuh.cnm_project_be.user.entity.UserDevice;
+import fit.iuh.cnm_project_be.user.enums.Platform;
 import fit.iuh.cnm_project_be.user.repository.UserProfileRepository;
+import fit.iuh.cnm_project_be.user.repository.UserDeviceRepository;
 import org.springframework.boot.CommandLineRunner;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -32,6 +35,8 @@ import org.springframework.security.oauth2.jwt.NimbusJwtDecoder;
 import org.springframework.security.oauth2.jwt.NimbusJwtEncoder;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.util.StreamUtils;
+import org.springframework.web.servlet.config.annotation.CorsRegistry;
+import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -57,6 +62,7 @@ public class SecurityConfig {
     public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
 
         http
+                .cors(Customizer.withDefaults())
             .csrf(AbstractHttpConfigurer::disable)
             .authorizeHttpRequests(auth -> auth
                 .requestMatchers(PUBLIC_END_POINT).permitAll()
@@ -146,7 +152,7 @@ public class SecurityConfig {
     }
 
     @Bean
-    CommandLineRunner initDatabase(AccountRepository accountRepository, PasswordEncoder passwordEncoder, UserProfileRepository userProfileRepository) {
+    CommandLineRunner initDatabase(AccountRepository accountRepository, PasswordEncoder passwordEncoder, UserProfileRepository userProfileRepository, UserDeviceRepository userDeviceRepository) {
         UUID userId = UUID.randomUUID();
         return args -> {
             if (accountRepository.findByUsername("admin").isEmpty()) {
@@ -167,7 +173,37 @@ public class SecurityConfig {
 
                 userProfileRepository.save(adminProfile);
 
+                // Tạo device mặc định cho admin
+                UserDevice adminDevice = new UserDevice();
+                adminDevice.setUserId(userId);
+                adminDevice.setDeviceId("admin-default-device");
+                adminDevice.setPlatform(Platform.WEB);
+                adminDevice.setDeviceName("Admin Web");
+
+                userDeviceRepository.save(adminDevice);
+
                 System.out.println(">>> SecurityConfig: Created default admin account with password: @Admin123");
+            }
+        };
+    }
+
+    @Bean
+    public WebMvcConfigurer corsConfigurer() {
+        return new WebMvcConfigurer() {
+            @Override
+            public void addCorsMappings(CorsRegistry registry) {
+                registry.addMapping("/api/**")
+                    .allowedOriginPatterns(
+                        "http://localhost:*",
+                        "http://127.0.0.1:*",
+                        "http://192.168.*:*",
+                        "http://10.*:*",
+                        "exp://*"
+                    )
+                        .allowedMethods("GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH")
+                        .allowedHeaders("*")
+                        .allowCredentials(true)
+                        .maxAge(3600);
             }
         };
     }

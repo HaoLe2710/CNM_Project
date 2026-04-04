@@ -3,6 +3,8 @@ package fit.iuh.cnm_project_be.user.dto.request;
 import jakarta.validation.constraints.Size;
 import lombok.Data;
 
+import java.time.LocalDate;
+
 @Data
 public class UpdateUserProfileRequest {
 
@@ -23,4 +25,9 @@ public class UpdateUserProfileRequest {
 
     @Size(max = 30, message = "Phone must be less than 30 characters")
     private String phone;
+
+    @Size(max = 20, message = "Gender must be less than 20 characters")
+    private String gender;
+
+    private LocalDate dob;
 }

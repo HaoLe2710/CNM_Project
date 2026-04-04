@@ -8,7 +8,7 @@ import java.util.Optional;
 import java.util.UUID;
 
 @Repository
-public interface AccountRepository extends BaseRepository<Account, Long> {
+public interface AccountRepository extends BaseRepository<Account, UUID> {
     Optional<Account> findByUsername(String username);
     boolean existsAccountByUsername(String username);
     Optional<Account> findByUserIdAndDeletedAtIsNull(UUID userId);

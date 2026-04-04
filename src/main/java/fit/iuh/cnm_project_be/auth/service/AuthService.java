@@ -13,6 +13,7 @@ import fit.iuh.cnm_project_be.common.exception.NotFoundException;
 import fit.iuh.cnm_project_be.common.exception.UnauthorizedException;
 import fit.iuh.cnm_project_be.auth.utils.JwtUtils;
 import fit.iuh.cnm_project_be.user.service.UserService;
+import fit.iuh.cnm_project_be.user.service.UserDeviceService;
 import jakarta.servlet.http.Cookie;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
@@ -51,6 +52,7 @@ public class AuthService {
     PasswordEncoder passwordEncoder;
     JwtUtils  jwtUtils;
     UserService userService;
+    UserDeviceService userDeviceService;
 
     public LoginResponse login(LoginRequest request, HttpServletResponse httpServletResponse) {
         String username = request.getUsername();
@@ -63,7 +65,19 @@ public class AuthService {
             throw new UnauthorizedException("Wrong password");
         }
 
-        String accessToken = jwtUtils.generateToken(account);
+        // Lưu hoặc cập nhật device
+        userDeviceService.saveOrUpdateDevice(
+                account.getUserId(),
+                request.getDeviceId(),
+                request.getPlatform(),
+                request.getDeviceName()
+        );
+
+        String accessToken = jwtUtils.generateToken(
+                account,
+                request.getDeviceId(),
+                request.getPlatform().toString()
+        );
         String refreshToken = jwtUtils.generateRefreshToken();
 
         LocalDateTime refreshTokenExpiry = LocalDateTime.now().plusDays(REFRESH_TOKEN_EXPIRE_DAYS);
@@ -100,14 +114,35 @@ public class AuthService {
 
     @Transactional
     public void logout(HttpServletRequest request) {
-        // 1. Lấy token từ Cookie ra
+        // 1. Lấy token từ Authorization header
+        String authHeader = request.getHeader("Authorization");
+        String token = null;
+        if (authHeader != null && authHeader.startsWith("Bearer ")) {
+            token = authHeader.substring(7);
+        }
+
+        // 2. Nếu có token, lấy deviceId + platform, xoá device từ DB
+        if (token != null) {
+            String deviceId = jwtUtils.getDeviceIdFromToken(token);
+            String platformStr = jwtUtils.getPlatformFromToken(token);
+            String username = jwtUtils.getUsernameFromToken(token);
+
+            if (deviceId != null && platformStr != null && username != null) {
+                Account account = accountRepository.findByUsername(username).orElse(null);
+                if (account != null) {
+                    // Xoá device khỏi DB
+                    userDeviceService.deleteDevice(account.getUserId(), deviceId, platformStr);
+                }
+            }
+        }
+
+        // 3. Lấy refresh token từ Cookie và revoke
         String refreshToken = Arrays.stream(Optional.ofNullable(request.getCookies()).orElse(new Cookie[0]))
                 .filter(cookie -> "refreshToken".equals(cookie.getName()))
                 .map(Cookie::getValue)
                 .findFirst()
                 .orElse(null);
 
-        // 2. Nếu có token, xóa nó khỏi DB
         if (refreshToken != null) {
             refreshTokenService.revokeToken(refreshToken);
         }
@@ -115,17 +150,17 @@ public class AuthService {
 
     @Transactional
     public RegisterResponse register(RegisterRequest request) {
-        String username = request.getUsername().trim();
+        String phone = request.getUsername().trim();
 
-        if (accountRepository.existsAccountByUsername(username)) {
-            throw new BusinessException("Username already exists");
+        if (accountRepository.existsAccountByUsername(phone)) {
+            throw new BusinessException("Phone already exists");
         }
 
         UUID userId = UUID.randomUUID();
 
         try {
             Account newAccount = Account.builder()
-                    .username(username)
+                    .username(phone)
                     .userId(userId)
                     .password(passwordEncoder.encode(request.getPassword()))
                     .roles(List.of(Role.USER))
@@ -142,7 +177,7 @@ public class AuthService {
         } catch (BusinessException ex) {
             throw ex;
         } catch (Exception ex) {
-            log.error("Register failed for username {}: {}", username, ex.getMessage(), ex);
+            log.error("Register failed for phone {}: {}", phone, ex.getMessage(), ex);
             throw new BusinessException("Register failed");
         }
     }
