@@ -2,7 +2,6 @@ package fit.iuh.cnm_project_be.auth.dto.request;
 
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Pattern;
-import jakarta.validation.constraints.Size;
 import lombok.AccessLevel;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
@@ -16,8 +15,11 @@ import lombok.experimental.FieldDefaults;
 @AllArgsConstructor
 @FieldDefaults(level = AccessLevel.PRIVATE)
 public class RegisterRequest {
-	@NotBlank(message = "Username cannot be empty")
-	@Size(min = 3, max = 50, message = "Username must be from 3 to 50 characters")
+	@NotBlank(message = "Phone cannot be empty")
+	@Pattern(
+			regexp = "^0\\d{9}$",
+			message = "Phone must be 10 digits starting with 0"
+	)
 	String username;
 
 	@NotBlank(message = "Password can not be empty")
