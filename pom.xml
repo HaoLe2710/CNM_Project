@@ -157,7 +157,7 @@
         </dependency>
 <!--        Hết json -->
 
-        <dependency>
+    <dependency>
             <!--        depend này dùng để đọc file pem-->
             <groupId>org.bouncycastle</groupId>
             <artifactId>bcpkix-jdk18on</artifactId>

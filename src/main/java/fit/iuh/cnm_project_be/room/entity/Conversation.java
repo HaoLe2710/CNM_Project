@@ -25,6 +25,9 @@ public class Conversation extends BaseEntity {
 
     private String name;
 
+    @Column(name = "avatar_url")
+    private String avatarUrl;
+
     @Column(name = "type", nullable = false)
     @Convert(converter = ConversationTypeConverter.class)
     private ConversationType type;
