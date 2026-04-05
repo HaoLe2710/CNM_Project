@@ -3,8 +3,11 @@ package fit.iuh.cnm_project_be.auth.service;
 import fit.iuh.cnm_project_be.auth.dto.request.LoginRequest;
 import fit.iuh.cnm_project_be.auth.dto.request.RegisterRequest;
 import fit.iuh.cnm_project_be.auth.dto.request.ChangePasswordRequest;
+import fit.iuh.cnm_project_be.auth.dto.request.ForgotPasswordResetRequest;
 import fit.iuh.cnm_project_be.auth.dto.response.LoginResponse;
+import fit.iuh.cnm_project_be.auth.dto.response.ForgotPasswordVerifyOtpResponse;
 import fit.iuh.cnm_project_be.auth.dto.response.RegisterResponse;
+import fit.iuh.cnm_project_be.auth.dto.response.VerifyRegisterOtpResponse;
 import fit.iuh.cnm_project_be.auth.entity.Account;
 import fit.iuh.cnm_project_be.auth.enums.Role;
 import fit.iuh.cnm_project_be.auth.repository.AccountRepository;
@@ -53,13 +56,15 @@ public class AuthService {
     JwtUtils  jwtUtils;
     UserService userService;
     UserDeviceService userDeviceService;
+    RegisterOtpService registerOtpService;
+    ForgotPasswordOtpService forgotPasswordOtpService;
 
     public LoginResponse login(LoginRequest request, HttpServletResponse httpServletResponse) {
-        String username = request.getUsername();
+        String usernameOrEmail = request.getUsername().trim();
         String password = request.getPassword();
 
-        Account account = accountRepository.findByUsername(username)
-                .orElseThrow(() -> new NotFoundException("Username not existed"));
+        Account account = accountRepository.findByUsernameOrEmail(usernameOrEmail, usernameOrEmail)
+            .orElseThrow(() -> new NotFoundException("Phone or email not existed"));
 
         if (!passwordEncoder.matches(password, account.getPassword())) {
             throw new UnauthorizedException("Wrong password");
@@ -105,7 +110,7 @@ public class AuthService {
 
         return LoginResponse.builder()
                 .token(accessToken)
-                .userName(username)
+            .userName(account.getUsername())
                 .userId(account.getUserId())
                 .expiresIn(jwtUtils.getExpiresIn(accessToken))
                 .roles(account.getRoles())
@@ -150,10 +155,16 @@ public class AuthService {
 
     @Transactional
     public RegisterResponse register(RegisterRequest request) {
+        registerOtpService.consumeVerification(request.getEmail(), request.getOtpVerificationToken());
+
         String phone = request.getUsername().trim();
+        String email = request.getEmail().trim().toLowerCase();
 
         if (accountRepository.existsAccountByUsername(phone)) {
             throw new BusinessException("Phone already exists");
+        }
+        if (accountRepository.existsAccountByEmail(email)) {
+            throw new BusinessException("Email already exists");
         }
 
         UUID userId = UUID.randomUUID();
@@ -161,6 +172,7 @@ public class AuthService {
         try {
             Account newAccount = Account.builder()
                     .username(phone)
+                    .email(email)
                     .userId(userId)
                     .password(passwordEncoder.encode(request.getPassword()))
                     .roles(List.of(Role.USER))
@@ -180,6 +192,50 @@ public class AuthService {
             log.error("Register failed for phone {}: {}", phone, ex.getMessage(), ex);
             throw new BusinessException("Register failed");
         }
+    }
+
+    public void sendRegisterOtp(String email) {
+        registerOtpService.sendOtp(email);
+    }
+
+    public VerifyRegisterOtpResponse verifyRegisterOtp(String email, String otp) {
+        String verificationToken = registerOtpService.verifyOtp(email, otp);
+        return VerifyRegisterOtpResponse.builder()
+                .verificationToken(verificationToken)
+                .build();
+    }
+
+    public void sendForgotPasswordOtp(String identifier) {
+        Account account = getAccountByIdentifier(identifier);
+        forgotPasswordOtpService.sendOtp(account.getId(), account.getEmail());
+    }
+
+    public ForgotPasswordVerifyOtpResponse verifyForgotPasswordOtp(String identifier, String otp) {
+        Account account = getAccountByIdentifier(identifier);
+        String resetToken = forgotPasswordOtpService.verifyOtp(account.getId(), account.getEmail(), otp);
+
+        return ForgotPasswordVerifyOtpResponse.builder()
+                .resetToken(resetToken)
+                .build();
+    }
+
+    @Transactional
+    public void resetForgottenPassword(ForgotPasswordResetRequest request) {
+        Account account = getAccountByIdentifier(request.getIdentifier());
+
+        if (!request.getNewPassword().equals(request.getConfirmPassword())) {
+            throw new BusinessException("Confirm password does not match");
+        }
+
+        forgotPasswordOtpService.consumeResetToken(account.getId(), account.getEmail(), request.getResetToken());
+
+        if (passwordEncoder.matches(request.getNewPassword(), account.getPassword())) {
+            throw new BusinessException("New password must be different from current password");
+        }
+
+        account.setPassword(passwordEncoder.encode(request.getNewPassword()));
+        accountRepository.save(account);
+        refreshTokenService.revokeAllForAccount(account.getId());
     }
 
     @Transactional
@@ -239,6 +295,17 @@ public class AuthService {
 
         return accountRepository.findByUsername(username)
                 .orElseThrow(() -> new NotFoundException("Account not found"));
+    }
+
+    private Account getAccountByIdentifier(String identifier) {
+        String normalizedIdentifier = identifier == null ? "" : identifier.trim();
+        if (normalizedIdentifier.isBlank()) {
+            throw new BusinessException("Phone or email cannot be empty");
+        }
+
+        String emailLookup = normalizedIdentifier.toLowerCase();
+        return accountRepository.findByUsernameOrEmail(normalizedIdentifier, emailLookup)
+                .orElseThrow(() -> new NotFoundException("Account not existed"));
     }
 
 }

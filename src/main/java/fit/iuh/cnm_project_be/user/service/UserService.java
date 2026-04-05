@@ -1,5 +1,6 @@
 package fit.iuh.cnm_project_be.user.service;
 
+import fit.iuh.cnm_project_be.aws.AwsS3ImageService;
 import fit.iuh.cnm_project_be.user.entity.UserProfile;
 import fit.iuh.cnm_project_be.user.dto.request.UpdateUserProfileRequest;
 import fit.iuh.cnm_project_be.user.repository.UserProfileRepository;
@@ -12,6 +13,7 @@ import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.multipart.MultipartFile;
 
 import java.time.Instant;
 import java.util.UUID;
@@ -21,6 +23,7 @@ import java.util.UUID;
 public class UserService {
 
     private final UserProfileRepository userProfileRepository;
+    private final AwsS3ImageService awsS3ImageService;
 
     @Transactional(readOnly = true)
     public UserProfile getUser(UUID userId) {
@@ -59,6 +62,20 @@ public class UserService {
         user.setPhone(request.getPhone());
         user.setGender(request.getGender());
         user.setDob(request.getDob());
+        return userProfileRepository.save(user);
+    }
+
+    @Transactional
+    public UserProfile updateProfileAvatar(MultipartFile imageFile) {
+        UserProfile user = getMyProfile();
+
+        String oldAvatarUrl = user.getAvatarUrl();
+        if (oldAvatarUrl != null && !oldAvatarUrl.isBlank()) {
+            awsS3ImageService.deleteImage(oldAvatarUrl);
+        }
+
+        String newAvatarUrl = awsS3ImageService.uploadImage(user.getUserId(), imageFile);
+        user.setAvatarUrl(newAvatarUrl);
         return userProfileRepository.save(user);
     }
 

@@ -28,6 +28,9 @@ public class Account extends BaseEntity {
     @Column(unique = true, nullable = false)
     String username;
 
+    @Column(unique = true)
+    String email;
+
     @Column(nullable = false, name = "user_id")
     private UUID userId;
 

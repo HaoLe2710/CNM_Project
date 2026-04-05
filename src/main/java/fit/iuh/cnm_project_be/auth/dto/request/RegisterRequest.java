@@ -1,6 +1,7 @@
 package fit.iuh.cnm_project_be.auth.dto.request;
 
 import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.Email;
 import jakarta.validation.constraints.Pattern;
 import lombok.AccessLevel;
 import lombok.AllArgsConstructor;
@@ -15,6 +16,13 @@ import lombok.experimental.FieldDefaults;
 @AllArgsConstructor
 @FieldDefaults(level = AccessLevel.PRIVATE)
 public class RegisterRequest {
+	@NotBlank(message = "Email cannot be empty")
+	@Email(message = "Email is invalid")
+	String email;
+
+	@NotBlank(message = "OTP verification token cannot be empty")
+	String otpVerificationToken;
+
 	@NotBlank(message = "Phone cannot be empty")
 	@Pattern(
 			regexp = "^0\\d{9}$",
