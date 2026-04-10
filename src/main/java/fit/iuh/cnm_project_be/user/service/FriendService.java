@@ -227,4 +227,25 @@ public class FriendService {
         friendship.setFriendId(friendId);
         return friendship;
     }
+
+    @Transactional
+    public void unfriend(UUID friendUserId) {
+        UserProfile currentUser = userService.getMyProfile();
+
+        if (currentUser.getUserId().equals(friendUserId)) {
+            throw new BusinessException("You cannot unfriend yourself");
+        }
+
+        Friendship mySide = friendshipRepository
+                .findByUserIdAndFriendIdAndDeletedAtIsNull(currentUser.getUserId(), friendUserId)
+                .orElseThrow(() -> new BusinessException("You are not friends with this user"));
+
+        Friendship otherSide = friendshipRepository
+                .findByUserIdAndFriendIdAndDeletedAtIsNull(friendUserId, currentUser.getUserId())
+                .orElseThrow(() -> new BusinessException("Friendship data is inconsistent"));
+
+        friendshipRepository.delete(mySide);
+        friendshipRepository.delete(otherSide);
+    }
+
 }

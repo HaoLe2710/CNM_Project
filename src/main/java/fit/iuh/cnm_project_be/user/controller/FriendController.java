@@ -52,4 +52,11 @@ public class FriendController {
         return ApiResponse.ok(friendService.rejectRequest(requestId), UUID.randomUUID().toString());
     }
 
+    @DeleteMapping("/{friendUserId}")
+    public ApiResponse<String> unfriend(@PathVariable UUID friendUserId) {
+        friendService.unfriend(friendUserId);
+        return ApiResponse.ok("Unfriend successfully", UUID.randomUUID().toString());
+    }
+
+
 }

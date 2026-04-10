@@ -17,15 +17,32 @@ public interface UserProfileRepository
     Optional<UserProfile> findByUsernameAndDeletedAtIsNull(String username);
 
     Optional<UserProfile> findByInviteLinkAndDeletedAtIsNull(String inviteLink);
-    @Query("""
+//    @Query("""
+//    select u from UserProfile u
+//    where u.deletedAt is null
+//      and u.userId <> :currentUserId
+//      and (
+//            lower(coalesce(u.username, '')) like lower(concat('%', :keyword, '%'))
+//            or lower(coalesce(u.displayName, '')) like lower(concat('%', :keyword, '%'))
+//          )
+//    order by coalesce(u.displayName, u.username)
+//""")
+@Query("""
     select u from UserProfile u
     where u.deletedAt is null
       and u.userId <> :currentUserId
       and (
             lower(coalesce(u.username, '')) like lower(concat('%', :keyword, '%'))
             or lower(coalesce(u.displayName, '')) like lower(concat('%', :keyword, '%'))
+            or lower(coalesce(u.firstName, '')) like lower(concat('%', :keyword, '%'))
+            or lower(coalesce(u.lastName, '')) like lower(concat('%', :keyword, '%'))
+            or lower(coalesce(u.phone, '')) like lower(concat('%', :keyword, '%'))
+            or lower(concat(coalesce(u.firstName, ''), ' ', coalesce(u.lastName, '')))
+                like lower(concat('%', :keyword, '%'))
+            or lower(concat(coalesce(u.lastName, ''), ' ', coalesce(u.firstName, '')))
+                like lower(concat('%', :keyword, '%'))
           )
-    order by coalesce(u.displayName, u.username)
+    order by coalesce(u.displayName, concat(coalesce(u.firstName, ''), ' ', coalesce(u.lastName, '')), u.username)
 """)
     List<UserProfile> searchUsers(@Param("currentUserId") UUID currentUserId,
                                   @Param("keyword") String keyword,

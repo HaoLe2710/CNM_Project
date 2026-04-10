@@ -4,6 +4,7 @@ import fit.iuh.cnm_project_be.common.repository.SoftDeleteRepository;
 import fit.iuh.cnm_project_be.user.entity.Friendship;
 
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 
 public interface FriendshipRepository
@@ -14,5 +15,8 @@ public interface FriendshipRepository
     boolean existsByUserIdAndFriendIdAndDeletedAtIsNull(UUID userId, UUID friendId);
 
     List<Friendship> findByUserIdAndDeletedAtIsNullOrderByCreatedAtDesc(UUID userId);
+
+    Optional<Friendship> findByUserIdAndFriendIdAndDeletedAtIsNull(UUID userId, UUID friendId);
+
 
 }

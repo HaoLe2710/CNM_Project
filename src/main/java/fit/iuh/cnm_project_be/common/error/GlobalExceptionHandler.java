@@ -107,7 +107,7 @@ public class GlobalExceptionHandler {
             HttpServletRequest request) {
 
         String requestId = resolveRequestId(request);
-
+        ex.printStackTrace();
         // TODO: log.error("Unexpected error", ex);
 
         return ResponseEntity.status(ErrorCode.INTERNAL_ERROR.status())
