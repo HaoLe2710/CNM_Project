@@ -41,5 +41,10 @@ public class UserProfile extends BaseEntity {
     private String gender;
     private LocalDate dob;
 
+    // Trong UserProfile entity
+    @Column(name = "fcm_token")
+    private String fcmToken;
+
+
     private Instant bannedUntil;
 }

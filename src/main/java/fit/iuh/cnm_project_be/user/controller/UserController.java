@@ -10,26 +10,34 @@ import jakarta.validation.Valid;
 import lombok.AccessLevel;
 import lombok.AllArgsConstructor;
 import lombok.experimental.FieldDefaults;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.MediaType;
-import org.springframework.web.bind.annotation.DeleteMapping;
-import org.springframework.web.bind.annotation.GetMapping;
-import org.springframework.web.bind.annotation.PatchMapping;
-import org.springframework.web.bind.annotation.PutMapping;
-import org.springframework.web.bind.annotation.RequestBody;
-import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RequestPart;
-import org.springframework.web.bind.annotation.RestController;
+import org.springframework.http.ResponseEntity;
+import org.springframework.security.core.annotation.AuthenticationPrincipal;
+import org.springframework.security.oauth2.jwt.Jwt;
+import org.springframework.web.bind.annotation.*;
+import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.http.ResponseEntity;
+
+import org.springframework.security.core.annotation.AuthenticationPrincipal;
+import org.springframework.security.oauth2.jwt.Jwt;
+import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.multipart.MultipartFile;
 
+import java.util.Map;
 import java.util.UUID;
 
 @RestController
 @RequestMapping("/api/v1/users")
 @AllArgsConstructor
 @FieldDefaults(level = AccessLevel.PRIVATE, makeFinal = true)
+
 public class UserController {
 
+    @Autowired
     UserService userService;
+    @Autowired
     AuthService authService;
 
     @GetMapping("/profile")
@@ -85,5 +93,14 @@ public class UserController {
                 .createdAt(profile.getCreatedAt())
                 .updatedAt(profile.getUpdatedAt())
                 .build();
+    }
+
+    @PostMapping("/me/fcm-token")
+    public ResponseEntity<Void> updateFcmToken(
+            @AuthenticationPrincipal Jwt jwt,
+            @RequestBody Map<String, String> body) {
+        UUID userId = UUID.fromString(jwt.getSubject()); // subject = userId???Nhớ check lại cấu hình JWT
+        userService.updateFcmToken(userId, body.get("token"));
+        return ResponseEntity.ok().build();
     }
 }

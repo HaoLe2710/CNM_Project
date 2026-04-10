@@ -145,4 +145,13 @@ public class UserService {
         return userProfileRepository.findByUsernameAndDeletedAtIsNull(username)
                 .orElseThrow(() -> new NotFoundException("User not found"));
     }
+
+    // Trong UserService
+    @Transactional
+    public void updateFcmToken(UUID userId, String fcmToken) {
+        UserProfile user = getUser(userId);
+        user.setFcmToken(fcmToken);
+        userProfileRepository.save(user);
+    }
+
 }
