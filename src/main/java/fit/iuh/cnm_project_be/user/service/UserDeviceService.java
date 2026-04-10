@@ -10,6 +10,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
+import java.util.List;
 import java.util.UUID;
 
 @Service
@@ -21,37 +22,42 @@ public class UserDeviceService {
 
     @Transactional
     public UserDevice saveOrUpdateDevice(UUID userId, String deviceId, Platform platform, String deviceName) {
-        // Tìm device cũ của user với platform này
-        UserDevice existingDevice = userDeviceRepository
-                .findByUserIdAndPlatform(userId, platform)
-                .orElse(null);
-
-        if (existingDevice != null) {
-            // Nếu cùng deviceId → chỉ update lastSeenAt
-            if (existingDevice.getDeviceId().equals(deviceId)) {
-                existingDevice.setLastSeenAt(Instant.now());
-                return userDeviceRepository.save(existingDevice);
-            }
-            // Nếu khác deviceId → thay thế device cũ
-            userDeviceRepository.delete(existingDevice);
-        }
-
-        // Tạo device mới
-        UserDevice newDevice = new UserDevice();
-        newDevice.setUserId(userId);
-        newDevice.setDeviceId(deviceId);
-        newDevice.setPlatform(platform);
-        newDevice.setDeviceName(deviceName);
-        newDevice.setLastSeenAt(Instant.now());
-        newDevice.setCreatedAt(Instant.now());
-
-        return userDeviceRepository.save(newDevice);
+        // 1. Tìm bản ghi cũ dựa trên (userId, deviceId, platform)
+        return userDeviceRepository.findByUserIdAndDeviceIdAndPlatform(userId, deviceId, platform)
+                .map(existingDevice -> {
+                    // 2. Nếu đã tồn tại: Cập nhật thông tin mới đè lên bản ghi cũ
+                    existingDevice.setDeviceName(deviceName);
+                    existingDevice.setLastSeenAt(Instant.now());
+                    // Không setCreatedAt để giữ nguyên ngày tạo đầu tiên
+                    return userDeviceRepository.save(existingDevice);
+                })
+                .orElseGet(() -> {
+                    // 3. Nếu chưa có: Tạo mới hoàn toàn
+                    UserDevice newDevice = new UserDevice();
+                    newDevice.setUserId(userId);
+                    newDevice.setDeviceId(deviceId);
+                    newDevice.setPlatform(platform);
+                    newDevice.setDeviceName(deviceName);
+                    newDevice.setLastSeenAt(Instant.now());
+                    newDevice.setCreatedAt(Instant.now());
+                    return userDeviceRepository.save(newDevice);
+                });
     }
 
     public boolean isDeviceValid(UUID userId, String deviceId, Platform platform) {
         return userDeviceRepository
                 .findByUserIdAndDeviceIdAndPlatform(userId, deviceId, platform)
                 .isPresent();
+    }
+
+    public UserDevice getUserDevice(UUID userId, String deviceId) {
+        return userDeviceRepository
+                .findByUserIdAndDeviceId(userId, deviceId)
+                .orElse(null);
+    }
+
+    public List<UserDevice> getUserDeviceByUserId(UUID userId) {
+        return userDeviceRepository.findByUserId(userId);
     }
 
     @Transactional

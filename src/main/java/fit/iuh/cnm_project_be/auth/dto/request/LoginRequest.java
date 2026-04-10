@@ -16,7 +16,7 @@ import lombok.experimental.FieldDefaults;
 @AllArgsConstructor
 @FieldDefaults(level = AccessLevel.PRIVATE)
 public class LoginRequest {
-    @NotBlank(message = "Username cannot be empty")
+    @NotBlank(message = "Phone or email cannot be empty")
     String username;
 
     @NotBlank(message = "Password cannot be empty")

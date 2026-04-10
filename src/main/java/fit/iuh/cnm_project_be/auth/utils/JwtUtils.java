@@ -101,7 +101,8 @@ public class JwtUtils {
                     .expiresAt(now.plus(1, ChronoUnit.HOURS))
                     .subject(account.getUsername())
                     .claim("userId", account.getUserId().toString())
-                    .claim("scope", scope);
+                    .claim("scope", scope)
+                    ;
 
             if (deviceId != null) {
                 claimsBuilder.claim("deviceId", deviceId);
@@ -124,5 +125,10 @@ public class JwtUtils {
 //    giai ma token
     public Jwt decodeToken(String token) {
         return jwtDecoder.decode(token);
+    }
+
+    public String getUserIdFromToken(String token) {
+        Map<String, Object> claims = getClaims(token);
+        return claims != null ? (String) claims.get("userId") : null;
     }
 }
