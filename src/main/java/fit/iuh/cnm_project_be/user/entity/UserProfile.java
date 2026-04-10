@@ -2,9 +2,12 @@ package fit.iuh.cnm_project_be.user.entity;
 
 import fit.iuh.cnm_project_be.common.entity.BaseEntity;
 import jakarta.persistence.*;
+import jakarta.validation.constraints.Positive;
+import jakarta.validation.constraints.Size;
 import lombok.*;
 import org.hibernate.annotations.SQLDelete;
 
+import java.time.LocalDate;
 import java.time.Instant;
 import java.util.UUID;
 
@@ -35,6 +38,8 @@ public class UserProfile extends BaseEntity {
     private String qrCodeUrl;
     private String bio;
     private String phone;
+    private String gender;
+    private LocalDate dob;
 
     // Trong UserProfile entity
     @Column(name = "fcm_token")
@@ -42,5 +47,4 @@ public class UserProfile extends BaseEntity {
 
 
     private Instant bannedUntil;
-
 }

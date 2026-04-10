@@ -63,3 +63,9 @@ logs/
 # Chặn file service account
 src/main/resources/firebase-service-account.json
 
+/src/main/resources/certs/private_key.pem
+/AGENTS.md
+/CLAUDE.md
+
+/src/main/resources/firebase-service-account.json
+/congnghemoi-zalo-user_accessKeys.csv
