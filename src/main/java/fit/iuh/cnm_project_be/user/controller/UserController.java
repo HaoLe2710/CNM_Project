@@ -3,32 +3,42 @@ package fit.iuh.cnm_project_be.user.controller;
 import fit.iuh.cnm_project_be.common.api.ApiResponse;
 import fit.iuh.cnm_project_be.user.dto.request.UpdateUserProfileRequest;
 import fit.iuh.cnm_project_be.user.dto.response.UserProfileResponse;
-import fit.iuh.cnm_project_be.user.dto.response.UserSearchResponse;
 import fit.iuh.cnm_project_be.user.entity.UserProfile;
 import fit.iuh.cnm_project_be.auth.service.AuthService;
-import fit.iuh.cnm_project_be.user.service.FriendService;
 import fit.iuh.cnm_project_be.user.service.UserService;
 import jakarta.validation.Valid;
 import lombok.AccessLevel;
 import lombok.AllArgsConstructor;
 import lombok.experimental.FieldDefaults;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
+import org.springframework.security.core.annotation.AuthenticationPrincipal;
+import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.web.bind.annotation.*;
+import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.http.ResponseEntity;
+
+import org.springframework.security.core.annotation.AuthenticationPrincipal;
+import org.springframework.security.oauth2.jwt.Jwt;
+import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.multipart.MultipartFile;
 
-import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 @RestController
 @RequestMapping("/api/v1/users")
 @AllArgsConstructor
 @FieldDefaults(level = AccessLevel.PRIVATE, makeFinal = true)
+
 public class UserController {
 
+    @Autowired
     UserService userService;
+    @Autowired
     AuthService authService;
-    FriendService friendService;
-
 
     @GetMapping("/profile")
     public ApiResponse<UserProfileResponse> getUserProfile() {
@@ -65,11 +75,6 @@ public class UserController {
 
         return ApiResponse.ok("Delete user and account successfully", UUID.randomUUID().toString());
     }
-    @GetMapping("/search")
-    public ApiResponse<List<UserSearchResponse>> searchUsers(@RequestParam("q") String keyword) {
-        return ApiResponse.ok(friendService.searchUsers(keyword), UUID.randomUUID().toString());
-    }
-
 
     private UserProfileResponse toResponse(UserProfile profile) {
         return UserProfileResponse.builder()
@@ -88,5 +93,14 @@ public class UserController {
                 .createdAt(profile.getCreatedAt())
                 .updatedAt(profile.getUpdatedAt())
                 .build();
+    }
+
+    @PostMapping("/me/fcm-token")
+    public ResponseEntity<Void> updateFcmToken(
+            @AuthenticationPrincipal Jwt jwt,
+            @RequestBody Map<String, String> body) {
+        UUID userId = UUID.fromString(jwt.getSubject()); // subject = userId???Nhớ check lại cấu hình JWT
+        userService.updateFcmToken(userId, body.get("token"));
+        return ResponseEntity.ok().build();
     }
 }

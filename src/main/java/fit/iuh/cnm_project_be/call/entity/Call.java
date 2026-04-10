@@ -15,7 +15,7 @@ import java.util.UUID;
 public class Call {
 
     @Id
-    @GeneratedValue
+    @GeneratedValue(strategy = GenerationType.UUID)
     private UUID id;
 
     @Column(name = "caller_id", nullable = false)
