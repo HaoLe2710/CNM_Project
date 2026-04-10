@@ -15,6 +15,8 @@ public interface UserDeviceRepository
 
     Optional<UserDevice> findByDeviceId(String deviceId);
 
+    Optional<UserDevice> findByUserIdAndDeviceId(UUID userId, String deviceId);
+
     Optional<UserDevice> findByUserIdAndPlatform(UUID userId, Platform platform);
 
     Optional<UserDevice> findByUserIdAndDeviceIdAndPlatform(UUID userId, String deviceId, Platform platform);

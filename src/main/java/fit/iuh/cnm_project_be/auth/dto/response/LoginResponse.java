@@ -14,9 +14,10 @@ import java.util.UUID;
 @FieldDefaults(level = AccessLevel.PRIVATE)
 @Builder
 public class LoginResponse {
-    String token;
-    String userName;
+    String email;
+    String phone;
     UUID userId;
-    LocalDateTime expiresIn;
     List<Role> roles;
+    String status; // "SUCCESS" hoặc "PENDING_APPROVAL"
+    String approvalId;
 }

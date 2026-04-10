@@ -15,6 +15,7 @@ import fit.iuh.cnm_project_be.user.entity.UserDevice;
 import fit.iuh.cnm_project_be.user.enums.Platform;
 import fit.iuh.cnm_project_be.user.repository.UserProfileRepository;
 import fit.iuh.cnm_project_be.user.repository.UserDeviceRepository;
+import jakarta.servlet.http.Cookie;
 import org.springframework.boot.CommandLineRunner;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -33,6 +34,8 @@ import org.springframework.security.oauth2.jwt.JwtDecoder;
 import org.springframework.security.oauth2.jwt.JwtEncoder;
 import org.springframework.security.oauth2.jwt.NimbusJwtDecoder;
 import org.springframework.security.oauth2.jwt.NimbusJwtEncoder;
+import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationConverter;
+import org.springframework.security.oauth2.server.resource.authentication.JwtGrantedAuthoritiesConverter;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.util.StreamUtils;
 import org.springframework.web.servlet.config.annotation.CorsRegistry;
@@ -63,18 +66,41 @@ public class SecurityConfig {
 
         http
                 .cors(Customizer.withDefaults())
-            .csrf(AbstractHttpConfigurer::disable)
-            .authorizeHttpRequests(auth -> auth
-                .requestMatchers(PUBLIC_END_POINT).permitAll()
-                .anyRequest().authenticated()
-            )
-
-            .oauth2ResourceServer(oauth2 -> oauth2
-                    .jwt(Customizer.withDefaults())
-            )
-            .httpBasic(Customizer.withDefaults());
+                .csrf(AbstractHttpConfigurer::disable)
+                .authorizeHttpRequests(auth -> auth
+                    .requestMatchers(PUBLIC_END_POINT).permitAll()
+                    .anyRequest().authenticated()
+                )
+                .oauth2ResourceServer(oauth2 -> oauth2
+                    // 1. Cấu hình để Spring tự tìm Token trong Cookie thay vì Header
+                    .bearerTokenResolver(request -> {
+                        Cookie[] cookies = request.getCookies();
+                        if (cookies != null) {
+                            for (Cookie cookie : cookies) {
+                                if ("accessToken".equals(cookie.getName())) {
+                                    return cookie.getValue();
+                                }
+                            }
+                        }
+                        return null;
+                    })
+                .jwt(jwt -> jwt.jwtAuthenticationConverter(jwtAuthenticationConverter()))
+                );
 
         return http.build();
+    }
+    // Hàm này giúp Spring hiểu "scope" trong JWT chính là các Authorities (Roles)
+    @Bean
+    public JwtAuthenticationConverter jwtAuthenticationConverter() {
+        JwtGrantedAuthoritiesConverter authoritiesConverter = new JwtGrantedAuthoritiesConverter();
+        // Vì trong hàm generateToken bạn lưu dưới dạng "scope", mặc định Spring sẽ tìm claim này
+        // Chúng ta thêm tiền tố ROLE_ để dùng được hasRole('ADMIN')
+        authoritiesConverter.setAuthorityPrefix("ROLE_");
+        authoritiesConverter.setAuthoritiesClaimName("scope");
+
+        JwtAuthenticationConverter converter = new JwtAuthenticationConverter();
+        converter.setJwtGrantedAuthoritiesConverter(authoritiesConverter);
+        return converter;
     }
 
 //    Tong hop 2 key vao context de quan ly va lay ra moi khi can, khong can doc file pem lai
@@ -197,8 +223,7 @@ public class SecurityConfig {
                         "http://localhost:*",
                         "http://127.0.0.1:*",
                         "http://192.168.*:*",
-                        "http://10.*:*",
-                        "exp://*"
+                        "http://10.*:*"
                     )
                         .allowedMethods("GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH")
                         .allowedHeaders("*")
