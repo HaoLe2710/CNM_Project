@@ -34,9 +34,15 @@ import fit.iuh.cnm_project_be.realtime.dto.RealtimeEventType;
 import fit.iuh.cnm_project_be.room.dto.ConversationResponse;
 import fit.iuh.cnm_project_be.room.dto.ConversationStatusPayload;
 import fit.iuh.cnm_project_be.room.entity.Conversation;
+import fit.iuh.cnm_project_be.room.entity.ConversationMember;
+import fit.iuh.cnm_project_be.room.entity.ConversationUserSetting;
+import fit.iuh.cnm_project_be.room.enums.ConversationNotificationLevel;
 import fit.iuh.cnm_project_be.room.repository.ConversationMemberRepository;
 import fit.iuh.cnm_project_be.room.repository.ConversationRepository;
+import fit.iuh.cnm_project_be.room.repository.ConversationUserSettingRepository;
 import fit.iuh.cnm_project_be.storage.S3MediaStorageService;
+import fit.iuh.cnm_project_be.user.entity.UserProfile;
+import fit.iuh.cnm_project_be.user.repository.UserProfileRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.domain.PageRequest;
@@ -55,10 +61,15 @@ import java.util.Collection;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.EnumMap;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 @Service
@@ -67,6 +78,7 @@ public class MessageService {
 
     private static final int DEFAULT_MESSAGE_PAGE_SIZE = 50;
     private static final int MAX_MESSAGE_PAGE_SIZE = 100;
+    private static final Pattern MENTION_PATTERN = Pattern.compile("(?<![A-Za-z0-9._])@([A-Za-z0-9._]+)");
 
     private final MessageRepository messageRepository;
     private final MessageAttachmentRepository messageAttachmentRepository;
@@ -75,6 +87,8 @@ public class MessageService {
     private final MessageUserStateRepository messageUserStateRepository;
     private final ConversationRepository conversationRepository;
     private final ConversationMemberRepository conversationMemberRepository;
+    private final ConversationUserSettingRepository conversationUserSettingRepository;
+    private final UserProfileRepository userProfileRepository;
     private final SimpMessagingTemplate messagingTemplate;
     private final S3MediaStorageService s3MediaStorageService;
 
@@ -106,13 +120,14 @@ public class MessageService {
         MessageResponse response = mapToResponse(savedMessage, senderId, Collections.emptyList(), Collections.emptyList(), senderState);
         messagingTemplate.convertAndSend("/topic/conversations/" + conversation.getId(),
                 RealtimeEvent.of(RealtimeEventType.MESSAGE_CREATED, response));
-        broadcastConversationUpdates(conversation.getId());
+        broadcastConversationUpdatesForNewMessage(conversation, savedMessage);
 
         return response;
     }
 
     @Transactional(readOnly = true)
     public CursorPageResponse<MessageResponse> getMessages(UUID conversationId, UUID currentUserId, String cursor, int size) {
+        getConversationOrThrow(conversationId);
         ensureConversationMember(conversationId, currentUserId);
 
         int pageSize = normalizePageSize(size);
@@ -288,6 +303,7 @@ public class MessageService {
     // Seen/read state is authoritative in message_user_states; no transport-state write is needed here.
     @Transactional
     public void markAsSeen(UUID conversationId, UUID userId) {
+        getConversationOrThrow(conversationId);
         ensureConversationMember(conversationId, userId);
         Instant now = Instant.now();
         messageUserStateRepository.markConversationAsSeen(conversationId, userId, now, now);
@@ -308,6 +324,7 @@ public class MessageService {
 
     @Transactional(readOnly = true)
     public void assertConversationAccess(UUID conversationId, UUID userId) {
+        getConversationOrThrow(conversationId);
         ensureConversationMember(conversationId, userId);
     }
 
@@ -567,26 +584,146 @@ public class MessageService {
     }
 
     private void broadcastConversationUpdates(UUID conversationId) {
+        Conversation conversation = getConversationOrThrow(conversationId);
         conversationMemberRepository.findByConversationId(conversationId).forEach(member -> {
-            ConversationResponse response = buildConversationResponse(conversationId, member.getUserId());
+            ConversationUserSetting setting = findConversationUserSetting(conversationId, member.getUserId());
+            if (!shouldDeliverConversationRefresh(setting)) {
+                return;
+            }
+
+            ConversationResponse response = buildConversationResponse(conversation, member.getUserId(), setting);
             messagingTemplate.convertAndSend("/topic/users/" + member.getUserId() + "/conversations",
                     RealtimeEvent.of(RealtimeEventType.CONVERSATION_UPDATED, response));
         });
     }
 
-    private ConversationResponse buildConversationResponse(UUID conversationId, UUID userId) {
-        Conversation conversation = getConversationOrThrow(conversationId);
-        List<Message> lastMessages = messageRepository.findVisibleMessages(conversationId, userId, null, null, PageRequest.of(0, 1));
+    private void broadcastConversationUpdatesForNewMessage(Conversation conversation, Message message) {
+        List<ConversationMember> members = conversationMemberRepository.findByConversationId(conversation.getId());
+        Set<UUID> mentionedUserIds = resolveMentionedUserIds(conversation, members, message.getContent());
+
+        members.forEach(member -> {
+            ConversationUserSetting setting = findConversationUserSetting(conversation.getId(), member.getUserId());
+            if (!shouldDeliverConversationRefreshForNewMessage(conversation, member.getUserId(), setting, mentionedUserIds)) {
+                return;
+            }
+
+            ConversationResponse response = buildConversationResponse(conversation, member.getUserId(), setting);
+            messagingTemplate.convertAndSend("/topic/users/" + member.getUserId() + "/conversations",
+                    RealtimeEvent.of(RealtimeEventType.CONVERSATION_UPDATED, response));
+        });
+    }
+
+    private ConversationResponse buildConversationResponse(Conversation conversation, UUID userId, ConversationUserSetting setting) {
+        List<Message> lastMessages = messageRepository.findVisibleMessages(
+                conversation.getId(),
+                userId,
+                null,
+                null,
+                PageRequest.of(0, 1)
+        );
         Message lastMessage = lastMessages.isEmpty() ? null : lastMessages.get(0);
+        String displayName = resolveDisplayName(conversation, setting);
 
         return ConversationResponse.builder()
                 .id(conversation.getId())
                 .name(conversation.getName())
+                .avatarUrl(conversation.getAvatarUrl())
                 .type(String.valueOf(conversation.getType()))
                 .lastMessage(lastMessage != null ? lastMessage.getContent() : "")
                 .lastMessageTime(lastMessage != null ? lastMessage.getCreatedAt() : conversation.getCreatedAt())
-                .unreadCount(messageUserStateRepository.countUnreadMessages(conversationId, userId))
+                .unreadCount(messageUserStateRepository.countUnreadMessages(conversation.getId(), userId))
+                .muted(setting != null && setting.getMutedAt() != null)
+                .archived(setting != null && setting.getArchivedAt() != null)
+                .pinned(setting != null && setting.getPinnedAt() != null)
+                .notificationLevel(resolveNotificationLevel(setting))
+                .customName(setting != null ? setting.getCustomName() : null)
+                .displayName(displayName)
                 .build();
+    }
+
+    private ConversationUserSetting findConversationUserSetting(UUID conversationId, UUID userId) {
+        return conversationUserSettingRepository.findByConversationIdAndUserId(conversationId, userId)
+                .orElse(null);
+    }
+
+    private ConversationNotificationLevel resolveNotificationLevel(ConversationUserSetting setting) {
+        return setting != null && setting.getNotificationLevel() != null
+                ? setting.getNotificationLevel()
+                : ConversationNotificationLevel.ALL;
+    }
+
+    private boolean shouldDeliverConversationRefresh(ConversationUserSetting setting) {
+        ConversationNotificationLevel notificationLevel = resolveNotificationLevel(setting);
+        if (notificationLevel == ConversationNotificationLevel.NONE) {
+            return false;
+        }
+
+        // Non-message-create refreshes keep MENTIONS_ONLY compatibility behavior for now.
+        return true;
+    }
+
+    private boolean shouldDeliverConversationRefreshForNewMessage(
+            Conversation conversation,
+            UUID userId,
+            ConversationUserSetting setting,
+            Set<UUID> mentionedUserIds) {
+
+        ConversationNotificationLevel notificationLevel = resolveNotificationLevel(setting);
+        if (notificationLevel == ConversationNotificationLevel.NONE) {
+            return false;
+        }
+        if (notificationLevel == ConversationNotificationLevel.ALL) {
+            return true;
+        }
+        if (conversation.getType() == fit.iuh.cnm_project_be.room.enums.ConversationType.PRIVATE) {
+            // MENTIONS_ONLY stays compatibility-safe for private chats.
+            return true;
+        }
+
+        // MENTIONS_ONLY is mention-aware only for message-originated group refreshes.
+        return mentionedUserIds.contains(userId);
+    }
+
+    private Set<UUID> resolveMentionedUserIds(Conversation conversation, List<ConversationMember> members, String content) {
+        if (conversation.getType() != fit.iuh.cnm_project_be.room.enums.ConversationType.GROUP) {
+            return Set.of();
+        }
+
+        Set<String> mentionedUsernames = extractMentionedUsernames(content);
+        if (mentionedUsernames.isEmpty()) {
+            return Set.of();
+        }
+
+        Set<UUID> memberIds = members.stream()
+                .map(ConversationMember::getUserId)
+                .collect(Collectors.toSet());
+
+        return userProfileRepository.findAllById(memberIds).stream()
+                .filter(profile -> !profile.isDeleted())
+                .filter(profile -> profile.getUsername() != null && !profile.getUsername().isBlank())
+                .filter(profile -> mentionedUsernames.contains(profile.getUsername().toLowerCase(Locale.ROOT)))
+                .map(UserProfile::getUserId)
+                .collect(Collectors.toSet());
+    }
+
+    private Set<String> extractMentionedUsernames(String content) {
+        if (content == null || content.isBlank()) {
+            return Set.of();
+        }
+
+        Matcher matcher = MENTION_PATTERN.matcher(content);
+        Set<String> usernames = new HashSet<>();
+        while (matcher.find()) {
+            usernames.add(matcher.group(1).toLowerCase(Locale.ROOT));
+        }
+        return usernames;
+    }
+
+    private String resolveDisplayName(Conversation conversation, ConversationUserSetting setting) {
+        if (setting != null && setting.getCustomName() != null) {
+            return setting.getCustomName();
+        }
+        return conversation.getName();
     }
 
     private void broadcastReactionUpdate(Message message, UUID actorUserId, MessageReactionType actorReaction) {

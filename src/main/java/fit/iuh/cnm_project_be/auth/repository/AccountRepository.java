@@ -8,8 +8,16 @@ import java.util.Optional;
 import java.util.UUID;
 
 @Repository
-public interface AccountRepository extends BaseRepository<Account, Long> {
+public interface AccountRepository extends BaseRepository<Account, UUID> {
     Optional<Account> findByUsername(String username);
-    boolean existsAccountByUsername(String username);
+    Optional<Account> findByEmail(String email);
+
+    Optional<Account> findByEmailOrPhone(String email, String phone);
     Optional<Account> findByUserIdAndDeletedAtIsNull(UUID userId);
+
+    boolean existsByPhone(String phone);
+
+    boolean existsByEmail(String email);
+
+    boolean existsByEmailOrPhone(String email, String phone);
 }

@@ -52,6 +52,18 @@ public class JwtUtils {
         return claims != null ? (String) claims.get("sub") : null;
     }
 
+    //    lay deviceId từ token
+    public String getDeviceIdFromToken(String token) {
+        Map<String, Object> claims = getClaims(token);
+        return claims != null ? (String) claims.get("deviceId") : null;
+    }
+
+    //    lay platform từ token
+    public String getPlatformFromToken(String token) {
+        Map<String, Object> claims = getClaims(token);
+        return claims != null ? (String) claims.get("platform") : null;
+    }
+
 //    lay thoi gian het han
     public LocalDateTime getExpiresIn(String token) {
         try {
@@ -70,6 +82,10 @@ public class JwtUtils {
 
 //    tao  access token
     public String generateToken(Account account) {
+        return generateToken(account, null, null);
+    }
+
+    public String generateToken(Account account, String deviceId, String platform) {
         try {
             Instant now = Instant.now();
 
@@ -79,14 +95,23 @@ public class JwtUtils {
 
             JwsHeader jwsHeader = JwsHeader.with(SignatureAlgorithm.RS256).build();
 
-            JwtClaimsSet jwtClaimsSet = JwtClaimsSet.builder()
+            JwtClaimsSet.Builder claimsBuilder = JwtClaimsSet.builder()
                     .issuer(issuer)
                     .issuedAt(now)
                     .expiresAt(now.plus(1, ChronoUnit.HOURS))
                     .subject(account.getUsername())
                     .claim("userId", account.getUserId().toString())
                     .claim("scope", scope)
-                    .build();
+                    ;
+
+            if (deviceId != null) {
+                claimsBuilder.claim("deviceId", deviceId);
+            }
+            if (platform != null) {
+                claimsBuilder.claim("platform", platform);
+            }
+
+            JwtClaimsSet jwtClaimsSet = claimsBuilder.build();
 
             return jwtEncoder
                     .encode(JwtEncoderParameters.from(jwsHeader, jwtClaimsSet))
@@ -100,5 +125,10 @@ public class JwtUtils {
 //    giai ma token
     public Jwt decodeToken(String token) {
         return jwtDecoder.decode(token);
+    }
+
+    public String getUserIdFromToken(String token) {
+        Map<String, Object> claims = getClaims(token);
+        return claims != null ? (String) claims.get("userId") : null;
     }
 }

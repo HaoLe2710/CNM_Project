@@ -1,8 +1,8 @@
 package fit.iuh.cnm_project_be.user.service;
 
+import fit.iuh.cnm_project_be.aws.AwsS3ImageService;
 import fit.iuh.cnm_project_be.user.entity.UserProfile;
 import fit.iuh.cnm_project_be.user.dto.request.UpdateUserProfileRequest;
-import fit.iuh.cnm_project_be.user.mapper.UserProfileMapper;
 import fit.iuh.cnm_project_be.user.repository.UserProfileRepository;
 import fit.iuh.cnm_project_be.common.exception.NotFoundException;
 import fit.iuh.cnm_project_be.common.exception.BusinessException;
@@ -13,8 +13,10 @@ import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.multipart.MultipartFile;
 
 import java.time.Instant;
+import java.time.LocalDate;
 import java.util.UUID;
 
 @Service
@@ -22,13 +24,31 @@ import java.util.UUID;
 public class UserService {
 
     private final UserProfileRepository userProfileRepository;
-    private final UserProfileMapper userProfileMapper;
+    private final AwsS3ImageService awsS3ImageService;
 
     @Transactional(readOnly = true)
     public UserProfile getUser(UUID userId) {
         return userProfileRepository.findById(userId)
                 .filter(u -> u.getDeletedAt() == null)
                 .orElseThrow(() -> new NotFoundException("User not found"));
+    }
+
+    public UUID getCurrentUserId() {
+        // 1. Lấy thông tin xác thực từ Context hiện tại của Request
+        Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
+
+        // 2. Kiểm tra nếu đã xác thực và Principal là kiểu Jwt
+        if (authentication != null && authentication.getPrincipal() instanceof Jwt jwt) {
+
+            // 3. Lấy claim "userId" mà bạn đã nhét vào lúc generateToken
+            String userIdStr = jwt.getClaim("userId");
+
+            if (userIdStr != null) {
+                return UUID.fromString(userIdStr);
+            }
+        }
+
+        return null;
     }
 
     @Transactional
@@ -53,12 +73,33 @@ public class UserService {
     @Transactional
     public UserProfile updateUserProfile(UpdateUserProfileRequest request) {
         UserProfile user = getMyProfile();
-        userProfileMapper.updateEntity(user, request);
+        user.setDisplayName(request.getDisplayName());
+        user.setFirstName(request.getFirstName());
+        user.setLastName(request.getLastName());
+        user.setAvatarUrl(request.getAvatarUrl());
+        user.setBio(request.getBio());
+        user.setPhone(request.getPhone());
+        user.setGender(request.getGender());
+        user.setDob(request.getDob());
         return userProfileRepository.save(user);
     }
 
     @Transactional
-    public UserProfile createProfileForAccount(UUID userId, String username) {
+    public UserProfile updateProfileAvatar(MultipartFile imageFile) {
+        UserProfile user = getMyProfile();
+
+        String oldAvatarUrl = user.getAvatarUrl();
+        if (oldAvatarUrl != null && !oldAvatarUrl.isBlank()) {
+            awsS3ImageService.deleteImage(oldAvatarUrl);
+        }
+
+        String newAvatarUrl = awsS3ImageService.uploadImage(user.getUserId(), imageFile);
+        user.setAvatarUrl(newAvatarUrl);
+        return userProfileRepository.save(user);
+    }
+
+    @Transactional
+    public UserProfile createProfileForAccount(UUID userId, String username, String phone, String firstName, String lastName, LocalDate dob) {
         if (userProfileRepository.existsById(userId)) {
             throw new BusinessException("User profile already exists");
         }
@@ -66,7 +107,11 @@ public class UserService {
         UserProfile userProfile = UserProfile.builder()
                 .userId(userId)
                 .username(username)
-                .displayName(username)
+                .phone(phone)
+                .firstName(firstName)
+                .lastName(lastName)
+                .dob(dob)
+                .displayName(null)
                 .build();
 
         return userProfileRepository.save(userProfile);
