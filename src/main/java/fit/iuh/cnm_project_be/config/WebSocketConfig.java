@@ -18,6 +18,14 @@ public class WebSocketConfig implements WebSocketMessageBrokerConfigurer {
 
     @Override
     public void registerStompEndpoints(StompEndpointRegistry registry) {
-        registry.addEndpoint("/ws").setAllowedOriginPatterns("*").withSockJS();
+        // Endpoint cũ cho chat
+        registry.addEndpoint("/ws")
+                .setAllowedOriginPatterns("*")
+                .withSockJS();
+
+        // Endpoint mới dành riêng cho các tác vụ Auth (như duyệt thiết bị mới)
+        registry.addEndpoint("/auth/ws")
+                .setAllowedOriginPatterns("*")
+                .withSockJS();
     }
 }

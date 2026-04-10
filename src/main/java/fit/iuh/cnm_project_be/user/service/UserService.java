@@ -16,6 +16,7 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.time.Instant;
+import java.time.LocalDate;
 import java.util.UUID;
 
 @Service
@@ -30,6 +31,24 @@ public class UserService {
         return userProfileRepository.findById(userId)
                 .filter(u -> u.getDeletedAt() == null)
                 .orElseThrow(() -> new NotFoundException("User not found"));
+    }
+
+    public UUID getCurrentUserId() {
+        // 1. Lấy thông tin xác thực từ Context hiện tại của Request
+        Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
+
+        // 2. Kiểm tra nếu đã xác thực và Principal là kiểu Jwt
+        if (authentication != null && authentication.getPrincipal() instanceof Jwt jwt) {
+
+            // 3. Lấy claim "userId" mà bạn đã nhét vào lúc generateToken
+            String userIdStr = jwt.getClaim("userId");
+
+            if (userIdStr != null) {
+                return UUID.fromString(userIdStr);
+            }
+        }
+
+        return null;
     }
 
     @Transactional
@@ -80,7 +99,7 @@ public class UserService {
     }
 
     @Transactional
-    public UserProfile createProfileForAccount(UUID userId, String username) {
+    public UserProfile createProfileForAccount(UUID userId, String username, String phone, String firstName, String lastName, LocalDate dob) {
         if (userProfileRepository.existsById(userId)) {
             throw new BusinessException("User profile already exists");
         }
@@ -88,7 +107,11 @@ public class UserService {
         UserProfile userProfile = UserProfile.builder()
                 .userId(userId)
                 .username(username)
-            .displayName(null)
+                .phone(phone)
+                .firstName(firstName)
+                .lastName(lastName)
+                .dob(dob)
+                .displayName(null)
                 .build();
 
         return userProfileRepository.save(userProfile);

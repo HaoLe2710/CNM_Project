@@ -11,8 +11,13 @@ import java.util.UUID;
 public interface AccountRepository extends BaseRepository<Account, UUID> {
     Optional<Account> findByUsername(String username);
     Optional<Account> findByEmail(String email);
-    Optional<Account> findByUsernameOrEmail(String username, String email);
-    boolean existsAccountByUsername(String username);
-    boolean existsAccountByEmail(String email);
+
+    Optional<Account> findByEmailOrPhone(String email, String phone);
     Optional<Account> findByUserIdAndDeletedAtIsNull(UUID userId);
+
+    boolean existsByPhone(String phone);
+
+    boolean existsByEmail(String email);
+
+    boolean existsByEmailOrPhone(String email, String phone);
 }
