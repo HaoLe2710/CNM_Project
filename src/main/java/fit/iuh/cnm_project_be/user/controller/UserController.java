@@ -3,8 +3,10 @@ package fit.iuh.cnm_project_be.user.controller;
 import fit.iuh.cnm_project_be.common.api.ApiResponse;
 import fit.iuh.cnm_project_be.user.dto.request.UpdateUserProfileRequest;
 import fit.iuh.cnm_project_be.user.dto.response.UserProfileResponse;
+import fit.iuh.cnm_project_be.user.dto.response.UserSearchResponse;
 import fit.iuh.cnm_project_be.user.entity.UserProfile;
 import fit.iuh.cnm_project_be.auth.service.AuthService;
+import fit.iuh.cnm_project_be.user.service.FriendService;
 import fit.iuh.cnm_project_be.user.service.UserService;
 import jakarta.validation.Valid;
 import lombok.AccessLevel;
@@ -25,6 +27,7 @@ import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.multipart.MultipartFile;
 
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
@@ -39,6 +42,7 @@ public class UserController {
     UserService userService;
     @Autowired
     AuthService authService;
+    FriendService friendService;
 
     @GetMapping("/profile")
     public ApiResponse<UserProfileResponse> getUserProfile() {
@@ -74,6 +78,11 @@ public class UserController {
         authService.softDeleteUserAndAccount(profile.getUserId());
 
         return ApiResponse.ok("Delete user and account successfully", UUID.randomUUID().toString());
+    }
+
+    @GetMapping("/search")
+    public ApiResponse<List<UserSearchResponse>> searchUsers(@RequestParam("q") String keyword) {
+        return ApiResponse.ok(friendService.searchUsers(keyword), UUID.randomUUID().toString());
     }
 
     private UserProfileResponse toResponse(UserProfile profile) {

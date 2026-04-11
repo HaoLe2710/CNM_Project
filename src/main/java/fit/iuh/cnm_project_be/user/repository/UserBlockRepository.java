@@ -12,4 +12,7 @@ public interface UserBlockRepository
     List<UserBlock> findByBlockerId(UUID blockerId);
 
     boolean existsByBlockerIdAndBlockedId(UUID blockerId, UUID blockedId);
+
+    boolean existsByBlockerIdAndBlockedIdAndDeletedAtIsNull(UUID blockerId, UUID blockedId);
+
 }
