@@ -107,6 +107,7 @@ public class UserController {
             .qrCodeUrl(profile.getQrCodeUrl())
             .bio(profile.getBio())
             .phone(profile.getPhone())
+            .email(profile.getEmail())
             .gender(profile.getGender())
             .dob(profile.getDob())
             .createdAt(profile.getCreatedAt())
