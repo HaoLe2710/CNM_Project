@@ -75,7 +75,8 @@ public class RegistrationService {
                     savedAccount.getPhone(),
                     request.getFirstName(),
                     request.getLastName(),
-                    request.getDob()
+                    request.getDob(),
+                    request.getGender()
             );
 
             log.info("[Registration] - New account created successfully for username: {}", email);

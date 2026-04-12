@@ -1,5 +1,6 @@
 package fit.iuh.cnm_project_be.auth.dto.request;
 
+import com.nimbusds.openid.connect.sdk.claims.Gender;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Email;
 import jakarta.validation.constraints.NotNull;
@@ -49,4 +50,7 @@ public class RegisterRequest {
 
 	@NotNull(message = "Date of birth cannot be empty")
 	LocalDate dob;
+
+	@NotNull(message = "Gender cannot be empty")
+	String gender;
 }

@@ -79,7 +79,7 @@ public class AuthService {
      * Đăng xuất
      */
     public boolean logout(HttpServletRequest request, HttpServletResponse httpServletResponse) {
-        return logoutService.logout(request, httpServletResponse);
+        return logoutService.   logout(request, httpServletResponse);
     }
 
     /**
