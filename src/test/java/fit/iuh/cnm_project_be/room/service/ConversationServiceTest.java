@@ -4,6 +4,7 @@ import fit.iuh.cnm_project_be.common.exception.BusinessException;
 import fit.iuh.cnm_project_be.common.exception.ForbiddenException;
 import fit.iuh.cnm_project_be.common.exception.NotFoundException;
 import fit.iuh.cnm_project_be.room.dto.ConversationResponse;
+import fit.iuh.cnm_project_be.room.dto.CreateConversationRequest;
 import fit.iuh.cnm_project_be.room.entity.Conversation;
 import fit.iuh.cnm_project_be.room.entity.ConversationMember;
 import fit.iuh.cnm_project_be.room.entity.ConversationUserSetting;
@@ -59,6 +60,114 @@ class ConversationServiceTest {
     private ConversationService conversationService;
 
     @Test
+    void createConversationReusesExistingPrivateConversation() {
+        UUID creatorId = UUID.randomUUID();
+        UUID otherUserId = UUID.randomUUID();
+        UUID conversationId = UUID.randomUUID();
+        Conversation conversation = new Conversation();
+        conversation.setId(conversationId);
+        conversation.setCreatorId(creatorId);
+        conversation.setType(ConversationType.PRIVATE);
+
+        CreateConversationRequest request = new CreateConversationRequest();
+        request.setType(ConversationType.PRIVATE);
+        request.setParticipantIds(List.of(otherUserId));
+
+        when(userProfileRepository.findById(otherUserId))
+                .thenReturn(Optional.of(activeUser(otherUserId, "Teammate", "https://cdn.example.com/teammate.png")));
+        when(conversationRepository.findPrivateConversationByParticipants(creatorId, otherUserId))
+                .thenReturn(Optional.of(conversation));
+        when(conversationUserSettingRepository.findByConversationIdAndUserId(conversationId, creatorId))
+                .thenReturn(Optional.empty());
+        when(conversationMemberRepository.findByConversationId(conversationId))
+                .thenReturn(List.of(
+                        member(conversationId, creatorId, MemberRole.OWNER),
+                        member(conversationId, otherUserId, MemberRole.MEMBER)
+                ));
+        when(messageRepository.findVisibleMessages(any(), any(), any())).thenReturn(List.of());
+        when(messageUserStateRepository.countUnreadMessages(conversationId, creatorId)).thenReturn(0L);
+
+        ConversationResponse response = conversationService.createConversation(creatorId, request);
+
+        assertThat(response.getId()).isEqualTo(conversationId);
+        assertThat(response.getDisplayName()).isEqualTo("Teammate");
+        assertThat(response.getAvatarUrl()).isEqualTo("https://cdn.example.com/teammate.png");
+        assertThat(response.getPeerUserId()).isEqualTo(otherUserId);
+        assertThat(response.getPeerDisplayName()).isEqualTo("Teammate");
+        assertThat(response.getPeerAvatarUrl()).isEqualTo("https://cdn.example.com/teammate.png");
+        verify(conversationRepository, never()).save(any(Conversation.class));
+    }
+
+    @Test
+    void createConversationReturnsPrivatePeerMetadataForCreator() {
+        UUID creatorId = UUID.randomUUID();
+        UUID otherUserId = UUID.randomUUID();
+        UUID conversationId = UUID.randomUUID();
+        Conversation savedConversation = new Conversation();
+        savedConversation.setId(conversationId);
+        savedConversation.setCreatorId(creatorId);
+        savedConversation.setType(ConversationType.PRIVATE);
+
+        CreateConversationRequest request = new CreateConversationRequest();
+        request.setType(ConversationType.PRIVATE);
+        request.setParticipantIds(List.of(otherUserId));
+
+        when(userProfileRepository.findById(creatorId))
+                .thenReturn(Optional.of(activeUser(creatorId, "Creator", "https://cdn.example.com/creator.png")));
+        when(userProfileRepository.findById(otherUserId))
+                .thenReturn(Optional.of(activeUser(otherUserId, "Target User", "https://cdn.example.com/target.png")));
+        when(conversationRepository.findPrivateConversationByParticipants(creatorId, otherUserId))
+                .thenReturn(Optional.empty());
+        when(conversationRepository.save(any(Conversation.class))).thenReturn(savedConversation);
+        when(conversationMemberRepository.findByConversationId(conversationId))
+                .thenReturn(List.of(
+                        member(conversationId, creatorId, MemberRole.OWNER),
+                        member(conversationId, otherUserId, MemberRole.MEMBER)
+                ));
+        when(conversationUserSettingRepository.findByConversationIdAndUserId(conversationId, creatorId))
+                .thenReturn(Optional.empty());
+        when(conversationUserSettingRepository.findByConversationIdAndUserId(conversationId, otherUserId))
+                .thenReturn(Optional.empty());
+        when(messageRepository.findVisibleMessages(any(), any(), any())).thenReturn(List.of());
+        when(messageUserStateRepository.countUnreadMessages(conversationId, creatorId)).thenReturn(0L);
+        when(messageUserStateRepository.countUnreadMessages(conversationId, otherUserId)).thenReturn(0L);
+
+        ConversationResponse response = conversationService.createConversation(creatorId, request);
+
+        assertThat(response.getId()).isEqualTo(conversationId);
+        assertThat(response.getDisplayName()).isEqualTo("Target User");
+        assertThat(response.getAvatarUrl()).isEqualTo("https://cdn.example.com/target.png");
+        assertThat(response.getPeerUserId()).isEqualTo(otherUserId);
+        assertThat(response.getPeerDisplayName()).isEqualTo("Target User");
+        assertThat(response.getPeerAvatarUrl()).isEqualTo("https://cdn.example.com/target.png");
+        verify(conversationMemberRepository, org.mockito.Mockito.times(2))
+                .save(any(ConversationMember.class));
+    }
+
+    @Test
+    void getMyConversationsKeepsGroupDisplayMetadataOnConversationFields() {
+        UUID userId = UUID.randomUUID();
+        UUID conversationId = UUID.randomUUID();
+        Conversation conversation = groupConversation(conversationId, userId);
+        conversation.setName("Project Group");
+        conversation.setAvatarUrl("https://cdn.example.com/group.png");
+
+        when(conversationRepository.findAllByMemberId(userId)).thenReturn(List.of(conversation));
+        when(conversationUserSettingRepository.findByUserIdAndConversationIdIn(any(), any()))
+                .thenReturn(List.of());
+        when(messageRepository.findVisibleMessages(any(), any(), any())).thenReturn(List.of());
+        when(messageUserStateRepository.countUnreadMessages(conversationId, userId)).thenReturn(0L);
+
+        ConversationResponse response = conversationService.getMyConversations(userId, false).get(0);
+
+        assertThat(response.getDisplayName()).isEqualTo("Project Group");
+        assertThat(response.getAvatarUrl()).isEqualTo("https://cdn.example.com/group.png");
+        assertThat(response.getPeerUserId()).isNull();
+        assertThat(response.getPeerDisplayName()).isNull();
+        assertThat(response.getPeerAvatarUrl()).isNull();
+    }
+
+    @Test
     void addMemberAddsUserToGroupConversation() {
         UUID conversationId = UUID.randomUUID();
         UUID ownerId = UUID.randomUUID();
@@ -77,7 +186,7 @@ class ConversationServiceTest {
                 ));
         when(messageUserStateRepository.countUnreadMessages(conversationId, ownerId)).thenReturn(0L);
         when(messageUserStateRepository.countUnreadMessages(conversationId, newUserId)).thenReturn(0L);
-        when(messageRepository.findVisibleMessages(any(), any(), any(), any(), any())).thenReturn(List.of());
+        when(messageRepository.findVisibleMessages(any(), any(), any())).thenReturn(List.of());
 
         ConversationResponse response = conversationService.addMember(conversationId, ownerId, newUserId);
 
@@ -98,7 +207,7 @@ class ConversationServiceTest {
         when(conversationMemberRepository.findByConversationId(conversationId))
                 .thenReturn(List.of(member(conversationId, ownerId, MemberRole.OWNER)));
         when(messageUserStateRepository.countUnreadMessages(conversationId, ownerId)).thenReturn(0L);
-        when(messageRepository.findVisibleMessages(any(), any(), any(), any(), any())).thenReturn(List.of());
+        when(messageRepository.findVisibleMessages(any(), any(), any())).thenReturn(List.of());
 
         ConversationResponse response = conversationService.renameConversation(conversationId, ownerId, "  New group name  ");
 
@@ -154,7 +263,7 @@ class ConversationServiceTest {
         when(conversationMemberRepository.findByConversationId(conversationId))
                 .thenReturn(List.of(member(conversationId, adminId, MemberRole.ADMIN)));
         when(messageUserStateRepository.countUnreadMessages(conversationId, adminId)).thenReturn(0L);
-        when(messageRepository.findVisibleMessages(any(), any(), any(), any(), any())).thenReturn(List.of());
+        when(messageRepository.findVisibleMessages(any(), any(), any())).thenReturn(List.of());
 
         ConversationResponse response = conversationService.updateConversationAvatar(
                 conversationId,
@@ -205,7 +314,7 @@ class ConversationServiceTest {
                 .thenReturn(List.of(owner, target));
         when(messageUserStateRepository.countUnreadMessages(conversationId, ownerId)).thenReturn(0L);
         when(messageUserStateRepository.countUnreadMessages(conversationId, targetId)).thenReturn(0L);
-        when(messageRepository.findVisibleMessages(any(), any(), any(), any(), any())).thenReturn(List.of());
+        when(messageRepository.findVisibleMessages(any(), any(), any())).thenReturn(List.of());
 
         conversationService.transferOwnership(conversationId, ownerId, targetId);
 
@@ -304,7 +413,7 @@ class ConversationServiceTest {
                 .thenReturn(List.of(owner, target));
         when(messageUserStateRepository.countUnreadMessages(conversationId, ownerId)).thenReturn(0L);
         when(messageUserStateRepository.countUnreadMessages(conversationId, targetId)).thenReturn(0L);
-        when(messageRepository.findVisibleMessages(any(), any(), any(), any(), any())).thenReturn(List.of());
+        when(messageRepository.findVisibleMessages(any(), any(), any())).thenReturn(List.of());
 
         conversationService.promoteToAdmin(conversationId, ownerId, targetId);
 
@@ -331,7 +440,7 @@ class ConversationServiceTest {
                 .thenReturn(List.of(owner, target));
         when(messageUserStateRepository.countUnreadMessages(conversationId, ownerId)).thenReturn(0L);
         when(messageUserStateRepository.countUnreadMessages(conversationId, targetId)).thenReturn(0L);
-        when(messageRepository.findVisibleMessages(any(), any(), any(), any(), any())).thenReturn(List.of());
+        when(messageRepository.findVisibleMessages(any(), any(), any())).thenReturn(List.of());
 
         conversationService.demoteAdmin(conversationId, ownerId, targetId);
 
@@ -530,7 +639,7 @@ class ConversationServiceTest {
         when(conversationRepository.findAllByMemberId(userId)).thenReturn(List.of(conversation));
         when(conversationUserSettingRepository.findByUserIdAndConversationIdIn(any(), any()))
                 .thenReturn(List.of(setting));
-        when(messageRepository.findVisibleMessages(any(), any(), any(), any(), any())).thenReturn(List.of());
+        when(messageRepository.findVisibleMessages(any(), any(), any())).thenReturn(List.of());
         when(messageUserStateRepository.countUnreadMessages(any(), any())).thenReturn(0L);
 
         ConversationResponse response = conversationService.getMyConversations(userId, false).get(0);
@@ -550,7 +659,7 @@ class ConversationServiceTest {
         when(conversationRepository.findAllByMemberId(userId)).thenReturn(List.of(conversation));
         when(conversationUserSettingRepository.findByUserIdAndConversationIdIn(any(), any()))
                 .thenReturn(List.of());
-        when(messageRepository.findVisibleMessages(any(), any(), any(), any(), any())).thenReturn(List.of());
+        when(messageRepository.findVisibleMessages(any(), any(), any())).thenReturn(List.of());
         when(messageUserStateRepository.countUnreadMessages(any(), any())).thenReturn(0L);
 
         ConversationResponse response = conversationService.getMyConversations(userId, false).get(0);
@@ -586,7 +695,7 @@ class ConversationServiceTest {
         when(conversationUserSettingRepository.findByConversationIdAndUserId(conversationId, recipientId))
                 .thenReturn(Optional.of(recipientSetting));
         when(messageUserStateRepository.countUnreadMessages(conversationId, ownerId)).thenReturn(0L);
-        when(messageRepository.findVisibleMessages(eq(conversationId), eq(ownerId), any(), any(), any())).thenReturn(List.of());
+        when(messageRepository.findVisibleMessages(eq(conversationId), eq(ownerId), any())).thenReturn(List.of());
 
         conversationService.renameConversation(conversationId, ownerId, "Updated");
 
@@ -621,8 +730,8 @@ class ConversationServiceTest {
                 .thenReturn(Optional.of(recipientSetting));
         when(messageUserStateRepository.countUnreadMessages(conversationId, ownerId)).thenReturn(0L);
         when(messageUserStateRepository.countUnreadMessages(conversationId, recipientId)).thenReturn(0L);
-        when(messageRepository.findVisibleMessages(eq(conversationId), eq(ownerId), any(), any(), any())).thenReturn(List.of());
-        when(messageRepository.findVisibleMessages(eq(conversationId), eq(recipientId), any(), any(), any())).thenReturn(List.of());
+        when(messageRepository.findVisibleMessages(eq(conversationId), eq(ownerId), any())).thenReturn(List.of());
+        when(messageRepository.findVisibleMessages(eq(conversationId), eq(recipientId), any())).thenReturn(List.of());
 
         conversationService.renameConversation(conversationId, ownerId, "Updated");
 
@@ -643,7 +752,7 @@ class ConversationServiceTest {
         when(conversationRepository.findAllByMemberId(userId)).thenReturn(List.of(conversation));
         when(conversationUserSettingRepository.findByUserIdAndConversationIdIn(any(), any()))
                 .thenReturn(List.of(setting));
-        when(messageRepository.findVisibleMessages(any(), any(), any(), any(), any())).thenReturn(List.of());
+        when(messageRepository.findVisibleMessages(any(), any(), any())).thenReturn(List.of());
         when(messageUserStateRepository.countUnreadMessages(any(), any())).thenReturn(0L);
 
         List<ConversationResponse> responses = conversationService.getMyConversations(userId, false);
@@ -680,7 +789,7 @@ class ConversationServiceTest {
                 .thenReturn(List.of(archivedConversation, pinnedConversation, normalConversation));
         when(conversationUserSettingRepository.findByUserIdAndConversationIdIn(any(), any()))
                 .thenReturn(List.of(archivedSetting, pinnedSetting));
-        when(messageRepository.findVisibleMessages(any(), any(), any(), any(), any())).thenReturn(List.of());
+        when(messageRepository.findVisibleMessages(any(), any(), any())).thenReturn(List.of());
         when(messageUserStateRepository.countUnreadMessages(any(), any())).thenReturn(0L);
 
         List<ConversationResponse> responses = conversationService.getMyConversations(userId, false);
@@ -709,7 +818,7 @@ class ConversationServiceTest {
         when(conversationRepository.findAllByMemberId(userId)).thenReturn(List.of(conversation));
         when(conversationUserSettingRepository.findByUserIdAndConversationIdIn(any(), any()))
                 .thenReturn(List.of(setting));
-        when(messageRepository.findVisibleMessages(any(), any(), any(), any(), any())).thenReturn(List.of());
+        when(messageRepository.findVisibleMessages(any(), any(), any())).thenReturn(List.of());
         when(messageUserStateRepository.countUnreadMessages(any(), any())).thenReturn(0L);
 
         ConversationResponse response = conversationService.getMyConversations(userId, true).get(0);
@@ -753,7 +862,7 @@ class ConversationServiceTest {
                 .thenReturn(List.of(active, archivedNormal, archivedPinned));
         when(conversationUserSettingRepository.findByUserIdAndConversationIdIn(any(), any()))
                 .thenReturn(List.of(archivedPinnedSetting, archivedNormalSetting));
-        when(messageRepository.findVisibleMessages(any(), any(), any(), any(), any())).thenReturn(List.of());
+        when(messageRepository.findVisibleMessages(any(), any(), any())).thenReturn(List.of());
         when(messageUserStateRepository.countUnreadMessages(any(), any())).thenReturn(0L);
 
         List<ConversationResponse> responses = conversationService.getMyConversations(userId, true);
@@ -898,7 +1007,7 @@ class ConversationServiceTest {
         when(conversationMemberRepository.findByConversationId(conversationId))
                 .thenReturn(List.of(member(conversationId, ownerId, MemberRole.OWNER)));
         when(messageUserStateRepository.countUnreadMessages(conversationId, ownerId)).thenReturn(0L);
-        when(messageRepository.findVisibleMessages(any(), any(), any(), any(), any())).thenReturn(List.of());
+        when(messageRepository.findVisibleMessages(any(), any(), any())).thenReturn(List.of());
 
         conversationService.leaveConversation(conversationId, memberId);
 
@@ -958,8 +1067,15 @@ class ConversationServiceTest {
     }
 
     private UserProfile activeUser(UUID userId) {
+        return activeUser(userId, "User " + userId.toString().substring(0, 8), null);
+    }
+
+    private UserProfile activeUser(UUID userId, String displayName, String avatarUrl) {
         UserProfile userProfile = new UserProfile();
         userProfile.setUserId(userId);
+        userProfile.setDisplayName(displayName);
+        userProfile.setUsername(displayName);
+        userProfile.setAvatarUrl(avatarUrl);
         return userProfile;
     }
 }

@@ -115,9 +115,10 @@ public class MessageService {
         // User-view state lives in message_user_states and drives visibility/seen reads.
         initializeUserStates(savedMessage.getId(), conversation.getId(), senderId);
 
+        List<MessageAttachment> attachments = messageAttachmentRepository.findByMessageIdIn(List.of(savedMessage.getId()));
         MessageUserState senderState = messageUserStateRepository.findByMessageIdAndUserId(savedMessage.getId(), senderId)
                 .orElse(null);
-        MessageResponse response = mapToResponse(savedMessage, senderId, Collections.emptyList(), Collections.emptyList(), senderState);
+        MessageResponse response = mapToResponse(savedMessage, senderId, attachments, Collections.emptyList(), senderState);
         messagingTemplate.convertAndSend("/topic/conversations/" + conversation.getId(),
                 RealtimeEvent.of(RealtimeEventType.MESSAGE_CREATED, response));
         broadcastConversationUpdatesForNewMessage(conversation, savedMessage);
@@ -134,13 +135,7 @@ public class MessageService {
         MessageCursor parsedCursor = parseCursor(cursor);
         Pageable pageable = PageRequest.of(0, pageSize + 1);
 
-        List<Message> fetchedMessages = messageRepository.findVisibleMessages(
-                conversationId,
-                currentUserId,
-                parsedCursor.createdAt(),
-                parsedCursor.messageId(),
-                pageable
-        );
+        List<Message> fetchedMessages = loadVisibleMessages(conversationId, currentUserId, parsedCursor, pageable);
 
         boolean hasMore = fetchedMessages.size() > pageSize;
         List<Message> visibleMessages = hasMore
@@ -617,8 +612,6 @@ public class MessageService {
         List<Message> lastMessages = messageRepository.findVisibleMessages(
                 conversation.getId(),
                 userId,
-                null,
-                null,
                 PageRequest.of(0, 1)
         );
         Message lastMessage = lastMessages.isEmpty() ? null : lastMessages.get(0);
@@ -747,6 +740,20 @@ public class MessageService {
         return Math.min(requestedSize, MAX_MESSAGE_PAGE_SIZE);
     }
 
+    private List<Message> loadVisibleMessages(UUID conversationId, UUID userId, MessageCursor cursor, Pageable pageable) {
+        if (!cursor.isPresent()) {
+            return messageRepository.findVisibleMessages(conversationId, userId, pageable);
+        }
+
+        return messageRepository.findVisibleMessagesBeforeCursor(
+                conversationId,
+                userId,
+                cursor.createdAt(),
+                cursor.messageId(),
+                pageable
+        );
+    }
+
     private String encodeCursor(Message message) {
         String raw = message.getCreatedAt().toEpochMilli() + ":" + message.getId();
         return Base64.getUrlEncoder()
@@ -775,5 +782,8 @@ public class MessageService {
     }
 
     private record MessageCursor(Instant createdAt, Long messageId) {
+        private boolean isPresent() {
+            return createdAt != null && messageId != null;
+        }
     }
 }

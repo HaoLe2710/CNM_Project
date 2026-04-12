@@ -23,14 +23,30 @@ public interface MessageRepository extends SoftDeleteRepository<Message, Long> {
                       and state.userId = :userId
                       and (state.hiddenAt is not null or state.deletedForMeAt is not null)
               )
+            order by m.createdAt desc, m.id desc
+            """)
+    List<Message> findVisibleMessages(
+            @Param("conversationId") UUID conversationId,
+            @Param("userId") UUID userId,
+            Pageable pageable);
+
+    @Query("""
+            select m from Message m
+            where m.conversationId = :conversationId
+              and m.deletedAt is null
+              and not exists (
+                    select 1 from MessageUserState state
+                    where state.messageId = m.id
+                      and state.userId = :userId
+                      and (state.hiddenAt is not null or state.deletedForMeAt is not null)
+              )
               and (
-                    :cursorCreatedAt is null
-                    or m.createdAt < :cursorCreatedAt
+                    m.createdAt < :cursorCreatedAt
                     or (m.createdAt = :cursorCreatedAt and m.id < :cursorMessageId)
               )
             order by m.createdAt desc, m.id desc
             """)
-    List<Message> findVisibleMessages(
+    List<Message> findVisibleMessagesBeforeCursor(
             @Param("conversationId") UUID conversationId,
             @Param("userId") UUID userId,
             @Param("cursorCreatedAt") java.time.Instant cursorCreatedAt,

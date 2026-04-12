@@ -20,6 +20,7 @@ import fit.iuh.cnm_project_be.room.enums.MemberRole;
 import fit.iuh.cnm_project_be.room.repository.ConversationMemberRepository;
 import fit.iuh.cnm_project_be.room.repository.ConversationRepository;
 import fit.iuh.cnm_project_be.room.repository.ConversationUserSettingRepository;
+import fit.iuh.cnm_project_be.user.entity.UserProfile;
 import fit.iuh.cnm_project_be.user.repository.UserProfileRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.PageRequest;
@@ -34,6 +35,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 
@@ -67,6 +69,9 @@ public class ConversationService {
     @Transactional
     public ConversationResponse createConversation(UUID creatorId, CreateConversationRequest request) {
         Set<UUID> participantIds = normalizeParticipants(creatorId, request);
+        participantIds.stream()
+                .filter(participantId -> !participantId.equals(creatorId))
+                .forEach(this::ensureUserExists);
 
         if (request.getType() == ConversationType.PRIVATE) {
             UUID otherUserId = participantIds.stream()
@@ -370,14 +375,16 @@ public class ConversationService {
     }
 
     private ConversationResponse mapToResponse(Conversation conv, UUID userId, ConversationUserSetting setting) {
-        List<Message> lastMsgs = messageRepository.findVisibleMessages(conv.getId(), userId, null, null, PageRequest.of(0, 1));
+        List<Message> lastMsgs = messageRepository.findVisibleMessages(conv.getId(), userId, PageRequest.of(0, 1));
         Message lastMsg = lastMsgs.isEmpty() ? null : lastMsgs.get(0);
         long unreadCount = messageUserStateRepository.countUnreadMessages(conv.getId(), userId);
-        String displayName = resolveDisplayName(conv, setting);
+        PrivatePeerInfo privatePeerInfo = resolvePrivatePeerInfo(conv, userId);
+        String displayName = resolveDisplayName(conv, setting, privatePeerInfo);
+        String avatarUrl = resolveAvatarUrl(conv, privatePeerInfo);
         return ConversationResponse.builder()
                 .id(conv.getId())
                 .name(conv.getName())
-                .avatarUrl(conv.getAvatarUrl())
+                .avatarUrl(avatarUrl)
                 .type(String.valueOf(conv.getType()))
                 .lastMessage(lastMsg != null ? lastMsg.getContent() : "")
                 .lastMessageTime(lastMsg != null ? lastMsg.getCreatedAt() : conv.getCreatedAt())
@@ -388,6 +395,9 @@ public class ConversationService {
                 .notificationLevel(resolveNotificationLevel(setting))
                 .customName(setting != null ? setting.getCustomName() : null)
                 .displayName(displayName)
+                .peerUserId(privatePeerInfo.userId())
+                .peerDisplayName(privatePeerInfo.displayName())
+                .peerAvatarUrl(privatePeerInfo.avatarUrl())
                 .build();
     }
 
@@ -448,11 +458,13 @@ public class ConversationService {
             conversationMemberRepository.save(member);
         }
 
-        ConversationResponse response = mapToResponse(savedConversation, creatorId);
+        ConversationResponse creatorResponse = mapToResponse(savedConversation, creatorId);
         participantIds.forEach(userId ->
-                messagingTemplate.convertAndSend("/topic/users/" + userId + "/conversations",
-                        RealtimeEvent.of(RealtimeEventType.CONVERSATION_UPDATED, response)));
-        return response;
+                messagingTemplate.convertAndSend(
+                        "/topic/users/" + userId + "/conversations",
+                        RealtimeEvent.of(RealtimeEventType.CONVERSATION_UPDATED, mapToResponse(savedConversation, userId))
+                ));
+        return creatorResponse;
     }
 
     private void broadcastConversationUpdates(UUID conversationId) {
@@ -624,11 +636,82 @@ public class ConversationService {
         return normalizedCustomName;
     }
 
-    private String resolveDisplayName(Conversation conversation, ConversationUserSetting setting) {
+    private String resolveDisplayName(
+            Conversation conversation,
+            ConversationUserSetting setting,
+            PrivatePeerInfo privatePeerInfo) {
         if (setting != null && setting.getCustomName() != null) {
             return setting.getCustomName();
         }
+
+        if (conversation.getType() == ConversationType.PRIVATE) {
+            return privatePeerInfo.displayName() != null
+                    ? privatePeerInfo.displayName()
+                    : conversation.getName();
+        }
+
         return conversation.getName();
+    }
+
+    private String resolveAvatarUrl(Conversation conversation, PrivatePeerInfo privatePeerInfo) {
+        if (conversation.getType() != ConversationType.PRIVATE) {
+            return conversation.getAvatarUrl();
+        }
+
+        return privatePeerInfo.avatarUrl() != null
+                ? privatePeerInfo.avatarUrl()
+                : conversation.getAvatarUrl();
+    }
+
+    private PrivatePeerInfo resolvePrivatePeerInfo(Conversation conversation, UUID userId) {
+        if (conversation.getType() != ConversationType.PRIVATE || userId == null) {
+            return PrivatePeerInfo.empty();
+        }
+
+        return conversationMemberRepository.findByConversationId(conversation.getId()).stream()
+                .map(ConversationMember::getUserId)
+                .filter(memberUserId -> !memberUserId.equals(userId))
+                .findFirst()
+                .flatMap(userProfileRepository::findById)
+                .filter(userProfile -> !userProfile.isDeleted())
+                .map(userProfile -> new PrivatePeerInfo(
+                        userProfile.getUserId(),
+                        resolveUserDisplayName(userProfile),
+                        userProfile.getAvatarUrl()))
+                .orElseGet(PrivatePeerInfo::empty);
+    }
+
+    private String resolveUserDisplayName(UserProfile userProfile) {
+        if (userProfile == null) {
+            return null;
+        }
+
+        String displayName = userProfile.getDisplayName();
+        if (displayName != null && !displayName.isBlank()) {
+            return displayName;
+        }
+
+        String fullName = resolveFullName(userProfile);
+        if (fullName != null) {
+            return fullName;
+        }
+
+        String username = userProfile.getUsername();
+        if (username != null && !username.isBlank()) {
+            return username;
+        }
+
+        return userProfile.getUserId() != null ? userProfile.getUserId().toString() : null;
+    }
+
+    private String resolveFullName(UserProfile userProfile) {
+        String firstName = userProfile.getFirstName();
+        String lastName = userProfile.getLastName();
+
+        String fullName = String.join(" ",
+                firstName != null ? firstName.trim() : "",
+                lastName != null ? lastName.trim() : "").trim();
+        return fullName.isEmpty() ? null : fullName;
     }
 
     private void updateUserSetting(
@@ -666,6 +749,12 @@ public class ConversationService {
     private record ConversationWithPreference(ConversationResponse response, ConversationUserSetting setting) {
         private boolean isPinned() {
             return setting != null && setting.getPinnedAt() != null;
+        }
+    }
+
+    private record PrivatePeerInfo(UUID userId, String displayName, String avatarUrl) {
+        private static PrivatePeerInfo empty() {
+            return new PrivatePeerInfo(null, null, null);
         }
     }
 

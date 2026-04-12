@@ -27,4 +27,7 @@ public class ConversationResponse {
     private ConversationNotificationLevel notificationLevel;
     private String customName;
     private String displayName;
+    private UUID peerUserId;
+    private String peerDisplayName;
+    private String peerAvatarUrl;
 }

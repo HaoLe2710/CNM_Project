@@ -15,6 +15,7 @@ import fit.iuh.cnm_project_be.message.service.MessageService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
+import org.springframework.http.MediaType;
 import org.springframework.web.multipart.MultipartFile;
 import org.springframework.web.bind.annotation.*;
 
@@ -124,7 +125,7 @@ public class MessageController {
         return ApiResponse.ok(null, UUID.randomUUID().toString());
     }
 
-    @PostMapping("/attachments/upload")
+    @PostMapping(value = "/attachments/upload", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public ApiResponse<UploadAttachmentResponse> uploadAttachment(
             @RequestParam("file") MultipartFile file,
             @RequestHeader("x-user-id") UUID currentUserId) {
