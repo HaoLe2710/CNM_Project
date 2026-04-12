@@ -72,6 +72,15 @@ public class UserController {
         return ApiResponse.ok(response, UUID.randomUUID().toString());
     }
 
+    @PatchMapping(value = "/profile/cover-image", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    public ApiResponse<UserProfileResponse> updateProfileCoverImage(
+            @RequestPart("file") MultipartFile file
+    ) {
+        UserProfile profile = userService.updateProfileCoverImage(file);
+        UserProfileResponse response = toResponse(profile);
+        return ApiResponse.ok(response, UUID.randomUUID().toString());
+    }
+
     @DeleteMapping("/profile")
     public ApiResponse<String> softDeleteUserAndAccount() {
         UserProfile profile = userService.getMyProfile();
@@ -87,21 +96,22 @@ public class UserController {
 
     private UserProfileResponse toResponse(UserProfile profile) {
         return UserProfileResponse.builder()
-                .userId(profile.getUserId())
-                .username(profile.getUsername())
-                .displayName(profile.getDisplayName())
-                .firstName(profile.getFirstName())
-                .lastName(profile.getLastName())
-                .avatarUrl(profile.getAvatarUrl())
-                .inviteLink(profile.getInviteLink())
-                .qrCodeUrl(profile.getQrCodeUrl())
-                .bio(profile.getBio())
-                .phone(profile.getPhone())
-                .gender(profile.getGender())
-                .dob(profile.getDob())
-                .createdAt(profile.getCreatedAt())
-                .updatedAt(profile.getUpdatedAt())
-                .build();
+            .userId(profile.getUserId())
+            .username(profile.getUsername())
+            .displayName(profile.getDisplayName())
+            .firstName(profile.getFirstName())
+            .lastName(profile.getLastName())
+            .avatarUrl(profile.getAvatarUrl())
+            .coverUrl(profile.getCoverUrl())
+            .inviteLink(profile.getInviteLink())
+            .qrCodeUrl(profile.getQrCodeUrl())
+            .bio(profile.getBio())
+            .phone(profile.getPhone())
+            .gender(profile.getGender())
+            .dob(profile.getDob())
+            .createdAt(profile.getCreatedAt())
+            .updatedAt(profile.getUpdatedAt())
+            .build();
     }
 
     @PostMapping("/me/fcm-token")

@@ -28,6 +28,7 @@ public class UserProfile extends BaseEntity {
     private String firstName;
     private String lastName;
     private String avatarUrl;
+    private String coverUrl;
 
     @Column(unique = true)
     private String username;

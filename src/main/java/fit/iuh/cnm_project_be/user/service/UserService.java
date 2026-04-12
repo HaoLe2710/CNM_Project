@@ -72,6 +72,20 @@ public class UserService {
     }
 
     @Transactional
+    public UserProfile updateProfileCoverImage(MultipartFile imageFile) {
+        UserProfile user = getMyProfile();
+
+        String oldCoverUrl = user.getCoverUrl();
+        if (oldCoverUrl != null && !oldCoverUrl.isBlank()) {
+            awsS3ImageService.deleteImage(oldCoverUrl);
+        }
+
+        String newCoverUrl = awsS3ImageService.uploadImage(user.getUserId(), imageFile);
+        user.setCoverUrl(newCoverUrl);
+        return userProfileRepository.save(user);
+    }
+
+    @Transactional
     public UserProfile updateUserProfile(UpdateUserProfileRequest request) {
         UserProfile user = getMyProfile();
         user.setDisplayName(request.getDisplayName());
