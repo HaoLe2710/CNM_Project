@@ -23,6 +23,7 @@ public class UserProfileResponse {
     String firstName;
     String lastName;
     String avatarUrl;
+    String coverUrl;
     String inviteLink;
     String qrCodeUrl;
     String bio;

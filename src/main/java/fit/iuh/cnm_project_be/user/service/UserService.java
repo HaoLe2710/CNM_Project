@@ -7,6 +7,7 @@ import fit.iuh.cnm_project_be.user.repository.UserProfileRepository;
 import fit.iuh.cnm_project_be.common.exception.NotFoundException;
 import fit.iuh.cnm_project_be.common.exception.BusinessException;
 import fit.iuh.cnm_project_be.common.exception.UnauthorizedException;
+import jakarta.validation.constraints.NotNull;
 import lombok.RequiredArgsConstructor;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
@@ -71,6 +72,20 @@ public class UserService {
     }
 
     @Transactional
+    public UserProfile updateProfileCoverImage(MultipartFile imageFile) {
+        UserProfile user = getMyProfile();
+
+        String oldCoverUrl = user.getCoverUrl();
+        if (oldCoverUrl != null && !oldCoverUrl.isBlank()) {
+            awsS3ImageService.deleteImage(oldCoverUrl);
+        }
+
+        String newCoverUrl = awsS3ImageService.uploadImage(user.getUserId(), imageFile);
+        user.setCoverUrl(newCoverUrl);
+        return userProfileRepository.save(user);
+    }
+
+    @Transactional
     public UserProfile updateUserProfile(UpdateUserProfileRequest request) {
         UserProfile user = getMyProfile();
         user.setDisplayName(request.getDisplayName());
@@ -99,7 +114,7 @@ public class UserService {
     }
 
     @Transactional
-    public UserProfile createProfileForAccount(UUID userId, String username, String phone, String firstName, String lastName, LocalDate dob) {
+    public UserProfile createProfileForAccount(UUID userId, String username, String phone, String firstName, String lastName, LocalDate dob, @NotNull(message = "Gender cannot be empty") String gender) {
         if (userProfileRepository.existsById(userId)) {
             throw new BusinessException("User profile already exists");
         }
@@ -110,8 +125,9 @@ public class UserService {
                 .phone(phone)
                 .firstName(firstName)
                 .lastName(lastName)
+                .gender(gender)
                 .dob(dob)
-                .displayName(null)
+                .displayName(lastName + " " + firstName)
                 .build();
 
         return userProfileRepository.save(userProfile);
