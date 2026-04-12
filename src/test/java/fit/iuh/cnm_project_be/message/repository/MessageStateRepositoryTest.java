@@ -83,7 +83,7 @@ class MessageStateRepositoryTest {
         insertState(hiddenMessageId, userId, null, Instant.now(), null);
         insertState(visibleMessageId, userId, null, null, null);
 
-        List<Message> visibleMessages = messageRepository.findVisibleMessages(conversationId, userId, null, null, PageRequest.of(0, 10));
+        List<Message> visibleMessages = messageRepository.findVisibleMessages(conversationId, userId, PageRequest.of(0, 10));
 
         assertThat(visibleMessages).extracting(Message::getId).containsExactly(visibleMessageId);
     }
@@ -100,22 +100,87 @@ class MessageStateRepositoryTest {
         insertState(removedMessageId, userId, null, null, Instant.now());
         insertState(visibleMessageId, userId, null, null, null);
 
-        List<Message> visibleMessages = messageRepository.findVisibleMessages(conversationId, userId, null, null, PageRequest.of(0, 10));
+        List<Message> visibleMessages = messageRepository.findVisibleMessages(conversationId, userId, PageRequest.of(0, 10));
         long unreadCount = messageUserStateRepository.countUnreadMessages(conversationId, userId);
-        List<Message> previewMessages = messageRepository.findVisibleMessages(conversationId, userId, null, null, PageRequest.of(0, 1));
+        List<Message> previewMessages = messageRepository.findVisibleMessages(conversationId, userId, PageRequest.of(0, 1));
 
         assertThat(visibleMessages).extracting(Message::getId).containsExactly(visibleMessageId);
         assertThat(unreadCount).isEqualTo(1);
         assertThat(previewMessages).extracting(Message::getId).containsExactly(visibleMessageId);
     }
 
+    @Test
+    void initialLoadReturnsNewestVisibleMessagesInDescendingOrder() {
+        UUID conversationId = UUID.randomUUID();
+        UUID userId = UUID.randomUUID();
+        UUID senderId = UUID.randomUUID();
+
+        long oldestMessageId = insertMessage(conversationId, senderId, "oldest", Instant.parse("2026-03-23T00:00:00Z"));
+        long newestMessageId = insertMessage(conversationId, senderId, "newest", Instant.parse("2026-03-23T02:00:00Z"));
+        long middleMessageId = insertMessage(conversationId, senderId, "middle", Instant.parse("2026-03-23T01:00:00Z"));
+
+        List<Message> visibleMessages = messageRepository.findVisibleMessages(conversationId, userId, PageRequest.of(0, 10));
+
+        assertThat(visibleMessages).extracting(Message::getId)
+                .containsExactly(newestMessageId, middleMessageId, oldestMessageId);
+    }
+
+    @Test
+    void cursorLoadReturnsOnlyMessagesBeforeCursorUsingCreatedAtAndId() {
+        UUID conversationId = UUID.randomUUID();
+        UUID userId = UUID.randomUUID();
+        UUID senderId = UUID.randomUUID();
+        Instant sharedCreatedAt = Instant.parse("2026-03-23T01:00:00Z");
+
+        long sameTimestampLowerId = insertMessage(conversationId, senderId, "same-ts-lower-id", sharedCreatedAt);
+        long cursorMessageId = insertMessage(conversationId, senderId, "cursor", sharedCreatedAt);
+        long olderMessageId = insertMessage(conversationId, senderId, "older", Instant.parse("2026-03-23T00:00:00Z"));
+        insertMessage(conversationId, senderId, "newer", Instant.parse("2026-03-23T02:00:00Z"));
+
+        List<Message> visibleMessages = messageRepository.findVisibleMessagesBeforeCursor(
+                conversationId,
+                userId,
+                sharedCreatedAt,
+                cursorMessageId,
+                PageRequest.of(0, 10)
+        );
+
+        assertThat(visibleMessages).extracting(Message::getId)
+                .containsExactly(sameTimestampLowerId, olderMessageId);
+    }
+
+    @Test
+    void deletedMessagesAreExcludedFromVisibleMessages() {
+        UUID conversationId = UUID.randomUUID();
+        UUID userId = UUID.randomUUID();
+        UUID senderId = UUID.randomUUID();
+
+        long deletedMessageId = insertMessage(
+                conversationId,
+                senderId,
+                "deleted",
+                Instant.parse("2026-03-23T02:00:00Z"),
+                Instant.parse("2026-03-23T03:00:00Z")
+        );
+        long visibleMessageId = insertMessage(conversationId, senderId, "visible", Instant.parse("2026-03-23T01:00:00Z"));
+
+        List<Message> visibleMessages = messageRepository.findVisibleMessages(conversationId, userId, PageRequest.of(0, 10));
+
+        assertThat(visibleMessages).extracting(Message::getId).containsExactly(visibleMessageId);
+        assertThat(visibleMessages).extracting(Message::getId).doesNotContain(deletedMessageId);
+    }
+
     private long insertMessage(UUID conversationId, UUID senderId, String content, Instant createdAt) {
+        return insertMessage(conversationId, senderId, content, createdAt, null);
+    }
+
+    private long insertMessage(UUID conversationId, UUID senderId, String content, Instant createdAt, Instant deletedAt) {
         long id = MESSAGE_IDS.getAndIncrement();
         jdbcTemplate.update("""
                 insert into messages (
-                    id, conversation_id, sender_id, content, message_type, created_at
-                ) values (?, ?, ?, ?, 'text', ?)
-                """, id, conversationId, senderId, content, createdAt);
+                    id, conversation_id, sender_id, content, message_type, created_at, deleted_at
+                ) values (?, ?, ?, ?, 'text', ?, ?)
+                """, id, conversationId, senderId, content, createdAt, deletedAt);
         return id;
     }
 

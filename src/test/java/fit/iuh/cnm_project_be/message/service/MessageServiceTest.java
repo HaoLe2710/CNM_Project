@@ -2,8 +2,10 @@ package fit.iuh.cnm_project_be.message.service;
 
 import fit.iuh.cnm_project_be.common.exception.NotFoundException;
 import fit.iuh.cnm_project_be.message.dto.EditMessageRequest;
+import fit.iuh.cnm_project_be.message.dto.MessageAttachmentPayload;
 import fit.iuh.cnm_project_be.message.dto.MessageResponse;
 import fit.iuh.cnm_project_be.message.dto.SendMessageRequest;
+import fit.iuh.cnm_project_be.message.entity.MessageAttachment;
 import fit.iuh.cnm_project_be.message.entity.Message;
 import fit.iuh.cnm_project_be.message.entity.MessageUserState;
 import fit.iuh.cnm_project_be.message.enums.MessageDeliveryStatus;
@@ -33,7 +35,9 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
 
+import java.nio.charset.StandardCharsets;
 import java.time.Instant;
+import java.util.Base64;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -130,6 +134,135 @@ class MessageServiceTest {
     }
 
     @Test
+    void sendMessageWithImageAttachmentUsesAttachmentMetadataAndImageType() {
+        UUID conversationId = UUID.randomUUID();
+        UUID senderId = UUID.randomUUID();
+
+        Conversation conversation = new Conversation();
+        conversation.setId(conversationId);
+        conversation.setType(ConversationType.PRIVATE);
+        conversation.setCreatorId(senderId);
+
+        SendMessageRequest request = new SendMessageRequest();
+        request.setConversationId(conversationId);
+        request.setAttachments(List.of(attachmentPayload(
+                "https://cdn.example.com/chat/img.png",
+                "chat/u1/img.png",
+                "img.png",
+                "image/png",
+                2048L,
+                MessageType.IMAGE
+        )));
+
+        MessageUserState senderState = new MessageUserState();
+        senderState.setMessageId(106L);
+        senderState.setUserId(senderId);
+        senderState.setSeenAt(Instant.now());
+
+        when(conversationRepository.findById(conversationId)).thenReturn(Optional.of(conversation));
+        when(conversationMemberRepository.existsByConversationIdAndUserId(conversationId, senderId)).thenReturn(true);
+        when(conversationMemberRepository.findByConversationId(conversationId))
+                .thenReturn(List.of(member(conversationId, senderId)))
+                .thenReturn(List.of(member(conversationId, senderId)))
+                .thenReturn(List.of(member(conversationId, senderId)));
+        when(messageRepository.save(any(Message.class))).thenAnswer(invocation -> {
+            Message message = invocation.getArgument(0);
+            message.setId(106L);
+            return message;
+        });
+        when(messageUserStateRepository.findByMessageIdAndUserId(106L, senderId)).thenReturn(Optional.of(senderState));
+        when(messageAttachmentRepository.findByMessageIdIn(List.of(106L))).thenReturn(List.of(savedAttachment(
+                106L,
+                "https://cdn.example.com/chat/img.png",
+                "chat/u1/img.png",
+                "img.png",
+                "image/png",
+                2048L,
+                MessageType.IMAGE
+        )));
+        when(messageRepository.findVisibleMessages(eq(conversationId), eq(senderId), any())).thenReturn(List.of());
+        when(messageUserStateRepository.countUnreadMessages(conversationId, senderId)).thenReturn(0L);
+
+        MessageResponse response = messageService.sendMessage(senderId, request);
+
+        ArgumentCaptor<MessageAttachment> attachmentCaptor = ArgumentCaptor.forClass(MessageAttachment.class);
+        verify(messageAttachmentRepository).save(attachmentCaptor.capture());
+        MessageAttachment savedAttachment = attachmentCaptor.getValue();
+
+        assertThat(response.getType()).isEqualTo(MessageType.IMAGE);
+        assertThat(response.getAttachments()).hasSize(1);
+        assertThat(response.getAttachments().get(0).getType()).isEqualTo(MessageType.IMAGE);
+        assertThat(savedAttachment.getAttachmentType()).isEqualTo(MessageType.IMAGE);
+        assertThat(savedAttachment.getStorageKey()).isEqualTo("chat/u1/img.png");
+        assertThat(savedAttachment.getOriginalFileName()).isEqualTo("img.png");
+        assertThat(savedAttachment.getFileType()).isEqualTo("image/png");
+    }
+
+    @Test
+    void sendMessageWithDocumentAttachmentUsesFileType() {
+        UUID conversationId = UUID.randomUUID();
+        UUID senderId = UUID.randomUUID();
+
+        Conversation conversation = new Conversation();
+        conversation.setId(conversationId);
+        conversation.setType(ConversationType.PRIVATE);
+        conversation.setCreatorId(senderId);
+
+        SendMessageRequest request = new SendMessageRequest();
+        request.setConversationId(conversationId);
+        request.setAttachments(List.of(attachmentPayload(
+                "https://cdn.example.com/chat/spec.pdf",
+                "chat/u1/spec.pdf",
+                "spec.pdf",
+                "application/pdf",
+                8192L,
+                MessageType.FILE
+        )));
+
+        MessageUserState senderState = new MessageUserState();
+        senderState.setMessageId(107L);
+        senderState.setUserId(senderId);
+        senderState.setSeenAt(Instant.now());
+
+        when(conversationRepository.findById(conversationId)).thenReturn(Optional.of(conversation));
+        when(conversationMemberRepository.existsByConversationIdAndUserId(conversationId, senderId)).thenReturn(true);
+        when(conversationMemberRepository.findByConversationId(conversationId))
+                .thenReturn(List.of(member(conversationId, senderId)))
+                .thenReturn(List.of(member(conversationId, senderId)))
+                .thenReturn(List.of(member(conversationId, senderId)));
+        when(messageRepository.save(any(Message.class))).thenAnswer(invocation -> {
+            Message message = invocation.getArgument(0);
+            message.setId(107L);
+            return message;
+        });
+        when(messageUserStateRepository.findByMessageIdAndUserId(107L, senderId)).thenReturn(Optional.of(senderState));
+        when(messageAttachmentRepository.findByMessageIdIn(List.of(107L))).thenReturn(List.of(savedAttachment(
+                107L,
+                "https://cdn.example.com/chat/spec.pdf",
+                "chat/u1/spec.pdf",
+                "spec.pdf",
+                "application/pdf",
+                8192L,
+                MessageType.FILE
+        )));
+        when(messageRepository.findVisibleMessages(eq(conversationId), eq(senderId), any())).thenReturn(List.of());
+        when(messageUserStateRepository.countUnreadMessages(conversationId, senderId)).thenReturn(0L);
+
+        MessageResponse response = messageService.sendMessage(senderId, request);
+
+        ArgumentCaptor<MessageAttachment> attachmentCaptor = ArgumentCaptor.forClass(MessageAttachment.class);
+        verify(messageAttachmentRepository).save(attachmentCaptor.capture());
+        MessageAttachment savedAttachment = attachmentCaptor.getValue();
+
+        assertThat(response.getType()).isEqualTo(MessageType.FILE);
+        assertThat(response.getAttachments()).hasSize(1);
+        assertThat(response.getAttachments().get(0).getType()).isEqualTo(MessageType.FILE);
+        assertThat(savedAttachment.getAttachmentType()).isEqualTo(MessageType.FILE);
+        assertThat(savedAttachment.getOriginalFileName()).isEqualTo("spec.pdf");
+        assertThat(savedAttachment.getFileType()).isEqualTo("application/pdf");
+    }
+
+    @Test
     void markAsSeenUpdatesOnlyMessageUserStates() {
         UUID conversationId = UUID.randomUUID();
         UUID userId = UUID.randomUUID();
@@ -218,7 +351,7 @@ class MessageServiceTest {
 
         when(conversationRepository.findById(conversationId)).thenReturn(Optional.of(conversation));
         when(conversationMemberRepository.existsByConversationIdAndUserId(conversationId, userId)).thenReturn(true);
-        when(messageRepository.findVisibleMessages(eq(conversationId), eq(userId), eq(null), eq(null), any()))
+        when(messageRepository.findVisibleMessages(eq(conversationId), eq(userId), any()))
                 .thenReturn(List.of(message));
         when(messageAttachmentRepository.findByMessageIdIn(List.of(10L))).thenReturn(List.of());
         when(messageReactionRepository.findByMessageIdIn(List.of(10L))).thenReturn(List.of());
@@ -227,7 +360,46 @@ class MessageServiceTest {
         MessageResponse response = messageService.getMessages(conversationId, userId, null, 50).getItems().get(0);
 
         assertThat(response.getSeen()).isTrue();
+        verify(messageRepository).findVisibleMessages(eq(conversationId), eq(userId), any());
+        verify(messageRepository, never()).findVisibleMessagesBeforeCursor(any(), any(), any(), any(), any());
         verifyNoInteractions(messageStatusRepository);
+    }
+
+    @Test
+    void getMessagesUsesCursorQueryWhenCursorPresent() {
+        UUID conversationId = UUID.randomUUID();
+        UUID userId = UUID.randomUUID();
+        Instant cursorCreatedAt = Instant.parse("2026-03-23T00:00:00Z");
+        String cursor = Base64.getUrlEncoder()
+                .withoutPadding()
+                .encodeToString((cursorCreatedAt.toEpochMilli() + ":10").getBytes(StandardCharsets.UTF_8));
+
+        Conversation conversation = new Conversation();
+        conversation.setId(conversationId);
+        conversation.setCreatorId(userId);
+        conversation.setType(ConversationType.PRIVATE);
+
+        Message message = new Message();
+        message.setId(9L);
+        message.setConversationId(conversationId);
+        message.setSenderId(UUID.randomUUID());
+        message.setContent("older");
+        message.setMessageType(MessageType.TEXT);
+        message.setCreatedAt(Instant.parse("2026-03-22T23:59:00Z"));
+
+        when(conversationRepository.findById(conversationId)).thenReturn(Optional.of(conversation));
+        when(conversationMemberRepository.existsByConversationIdAndUserId(conversationId, userId)).thenReturn(true);
+        when(messageRepository.findVisibleMessagesBeforeCursor(eq(conversationId), eq(userId), eq(cursorCreatedAt), eq(10L), any()))
+                .thenReturn(List.of(message));
+        when(messageAttachmentRepository.findByMessageIdIn(List.of(9L))).thenReturn(List.of());
+        when(messageReactionRepository.findByMessageIdIn(List.of(9L))).thenReturn(List.of());
+        when(messageUserStateRepository.findByMessageIdInAndUserId(List.of(9L), userId)).thenReturn(List.of());
+
+        MessageResponse response = messageService.getMessages(conversationId, userId, cursor, 50).getItems().get(0);
+
+        assertThat(response.getId()).isEqualTo(9L);
+        verify(messageRepository).findVisibleMessagesBeforeCursor(eq(conversationId), eq(userId), eq(cursorCreatedAt), eq(10L), any());
+        verify(messageRepository, never()).findVisibleMessages(eq(conversationId), eq(userId), any());
     }
 
     @Test
@@ -366,7 +538,7 @@ class MessageServiceTest {
                 .thenReturn(Optional.empty());
         when(conversationUserSettingRepository.findByConversationIdAndUserId(conversationId, recipientId))
                 .thenReturn(Optional.of(recipientSetting));
-        when(messageRepository.findVisibleMessages(eq(conversationId), eq(senderId), any(), any(), any())).thenReturn(List.of());
+        when(messageRepository.findVisibleMessages(eq(conversationId), eq(senderId), any())).thenReturn(List.of());
         when(messageUserStateRepository.countUnreadMessages(conversationId, senderId)).thenReturn(0L);
 
         messageService.sendMessage(senderId, request);
@@ -415,8 +587,8 @@ class MessageServiceTest {
                 .thenReturn(Optional.empty());
         when(conversationUserSettingRepository.findByConversationIdAndUserId(conversationId, recipientId))
                 .thenReturn(Optional.of(recipientSetting));
-        when(messageRepository.findVisibleMessages(eq(conversationId), eq(senderId), any(), any(), any())).thenReturn(List.of());
-        when(messageRepository.findVisibleMessages(eq(conversationId), eq(recipientId), any(), any(), any())).thenReturn(List.of());
+        when(messageRepository.findVisibleMessages(eq(conversationId), eq(senderId), any())).thenReturn(List.of());
+        when(messageRepository.findVisibleMessages(eq(conversationId), eq(recipientId), any())).thenReturn(List.of());
         when(messageUserStateRepository.countUnreadMessages(conversationId, senderId)).thenReturn(0L);
         when(messageUserStateRepository.countUnreadMessages(conversationId, recipientId)).thenReturn(0L);
 
@@ -493,8 +665,8 @@ class MessageServiceTest {
                         activeUser(mentionedUserId, "target"),
                         activeUser(otherUserId, "other")
                 ));
-        when(messageRepository.findVisibleMessages(eq(conversationId), eq(senderId), any(), any(), any())).thenReturn(List.of());
-        when(messageRepository.findVisibleMessages(eq(conversationId), eq(mentionedUserId), any(), any(), any())).thenReturn(List.of());
+        when(messageRepository.findVisibleMessages(eq(conversationId), eq(senderId), any())).thenReturn(List.of());
+        when(messageRepository.findVisibleMessages(eq(conversationId), eq(mentionedUserId), any())).thenReturn(List.of());
         when(messageUserStateRepository.countUnreadMessages(conversationId, senderId)).thenReturn(0L);
         when(messageUserStateRepository.countUnreadMessages(conversationId, mentionedUserId)).thenReturn(0L);
 
@@ -548,7 +720,7 @@ class MessageServiceTest {
                 .thenReturn(Optional.of(recipientSetting));
         when(userProfileRepository.findAllById(any(Iterable.class)))
                 .thenReturn(List.of(activeUser(senderId, "sender"), activeUser(recipientId, "target")));
-        when(messageRepository.findVisibleMessages(eq(conversationId), eq(senderId), any(), any(), any())).thenReturn(List.of());
+        when(messageRepository.findVisibleMessages(eq(conversationId), eq(senderId), any())).thenReturn(List.of());
         when(messageUserStateRepository.countUnreadMessages(conversationId, senderId)).thenReturn(0L);
 
         messageService.sendMessage(senderId, request);
@@ -600,8 +772,8 @@ class MessageServiceTest {
                 .thenReturn(Optional.of(recipientSetting));
         when(userProfileRepository.findAllById(any(Iterable.class)))
                 .thenReturn(List.of(activeUser(senderId, "sender"), activeUser(recipientId, "target")));
-        when(messageRepository.findVisibleMessages(eq(conversationId), eq(senderId), any(), any(), any())).thenReturn(List.of());
-        when(messageRepository.findVisibleMessages(eq(conversationId), eq(recipientId), any(), any(), any())).thenReturn(List.of());
+        when(messageRepository.findVisibleMessages(eq(conversationId), eq(senderId), any())).thenReturn(List.of());
+        when(messageRepository.findVisibleMessages(eq(conversationId), eq(recipientId), any())).thenReturn(List.of());
         when(messageUserStateRepository.countUnreadMessages(conversationId, senderId)).thenReturn(0L);
         when(messageUserStateRepository.countUnreadMessages(conversationId, recipientId)).thenReturn(0L);
 
@@ -623,5 +795,41 @@ class MessageServiceTest {
         userProfile.setUserId(userId);
         userProfile.setUsername(username);
         return userProfile;
+    }
+
+    private MessageAttachmentPayload attachmentPayload(
+            String url,
+            String storageKey,
+            String fileName,
+            String contentType,
+            long fileSize,
+            MessageType type) {
+        MessageAttachmentPayload payload = new MessageAttachmentPayload();
+        payload.setUrl(url);
+        payload.setStorageKey(storageKey);
+        payload.setFileName(fileName);
+        payload.setContentType(contentType);
+        payload.setFileSize(fileSize);
+        payload.setType(type);
+        return payload;
+    }
+
+    private MessageAttachment savedAttachment(
+            long messageId,
+            String url,
+            String storageKey,
+            String fileName,
+            String contentType,
+            long fileSize,
+            MessageType type) {
+        MessageAttachment attachment = new MessageAttachment();
+        attachment.setMessageId(messageId);
+        attachment.setFileUrl(url);
+        attachment.setStorageKey(storageKey);
+        attachment.setOriginalFileName(fileName);
+        attachment.setFileType(contentType);
+        attachment.setFileSize(fileSize);
+        attachment.setAttachmentType(type);
+        return attachment;
     }
 }
