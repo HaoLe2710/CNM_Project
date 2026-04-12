@@ -28,6 +28,7 @@ public class UserProfileResponse {
     String qrCodeUrl;
     String bio;
     String phone;
+    String email;
     String gender;
     LocalDate dob;
     Instant createdAt;

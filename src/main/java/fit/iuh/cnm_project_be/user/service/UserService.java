@@ -123,6 +123,7 @@ public class UserService {
                 .userId(userId)
                 .username(username)
                 .phone(phone)
+                .email(username)
                 .firstName(firstName)
                 .lastName(lastName)
                 .gender(gender)

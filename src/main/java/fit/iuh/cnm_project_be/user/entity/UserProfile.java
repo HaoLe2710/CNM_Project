@@ -39,6 +39,7 @@ public class UserProfile extends BaseEntity {
     private String qrCodeUrl;
     private String bio;
     private String phone;
+    private String email;
     private String gender;
     private LocalDate dob;
 
