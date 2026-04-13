@@ -113,12 +113,29 @@ public class AuthService {
                 .collect(Collectors.toList());
     }
 
+    org.springframework.messaging.simp.SimpMessagingTemplate messagingTemplate;
+
     /**
      * Đăng xuất device cụ thể
      */
     public void logoutDevice(UUID userId, String deviceId, String platform) {
         userDeviceService.deleteDevice(userId, deviceId, platform);
         log.info("[Device Logout] - User {} logged out from device {} on platform {}", userId, deviceId, platform);
+
+        try {
+            String topicName = "/topic/auth/" + userId + "/device-logout";
+            fit.iuh.cnm_project_be.auth.websocket.DeviceAuthWebSocketController.DeviceLogoutMessage response = 
+                    fit.iuh.cnm_project_be.auth.websocket.DeviceAuthWebSocketController.DeviceLogoutMessage.builder()
+                    .deviceId(deviceId)
+                    .platform(platform)
+                    .message("Device logged out successfully")
+                    .timestamp(System.currentTimeMillis())
+                    .build();
+            messagingTemplate.convertAndSend(topicName, response);
+            log.info("[WebSocket] - Logout notification sent to {} for device {}", topicName, deviceId);
+        } catch (Exception e) {
+            log.error("[WebSocket] - Error sending logout notification: {}", e.getMessage(), e);
+        }
     }
 }
 

@@ -293,13 +293,13 @@ public class AuthController {
                     return UUID.fromString(userIdStr);
                 } catch (IllegalArgumentException e) {
                     log.error("[Auth] - Invalid userId format in token: {}", userIdStr);
-                    throw new BusinessException("Invalid user ID in token");
+                    throw new fit.iuh.cnm_project_be.common.exception.UnauthorizedException("Invalid user ID in token");
                 }
             }
         }
 
         log.warn("[Auth] - Unable to extract userId from token");
-        throw new BusinessException("Unauthorized: User ID not found in token");
+        throw new fit.iuh.cnm_project_be.common.exception.UnauthorizedException("Unauthorized: User ID not found in token");
     }
 }
 

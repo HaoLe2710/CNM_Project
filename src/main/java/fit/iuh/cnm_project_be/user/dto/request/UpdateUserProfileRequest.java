@@ -17,8 +17,6 @@ public class UpdateUserProfileRequest {
     @Size(max = 100, message = "Last name must be less than 100 characters")
     private String lastName;
 
-    @Size(max = 500, message = "Avatar URL must be less than 500 characters")
-    private String avatarUrl;
 
     @Size(max = 500, message = "Bio must be less than 500 characters")
     private String bio;
