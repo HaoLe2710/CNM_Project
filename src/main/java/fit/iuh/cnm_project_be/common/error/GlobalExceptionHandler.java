@@ -5,6 +5,7 @@ import fit.iuh.cnm_project_be.common.exception.ApiException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.ConstraintViolationException;
 import org.springframework.http.ResponseEntity;
+import org.springframework.web.multipart.MaxUploadSizeExceededException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
@@ -94,6 +95,22 @@ public class GlobalExceptionHandler {
                         ErrorCode.VALIDATION_ERROR.name(),
                         ErrorCode.VALIDATION_ERROR.defaultMessage(),
                         errors,
+                        requestId
+                ));
+    }
+
+    @ExceptionHandler(MaxUploadSizeExceededException.class)
+    public ResponseEntity<ApiResponse<Void>> handleMaxUploadSizeExceeded(
+            MaxUploadSizeExceededException ex,
+            HttpServletRequest request) {
+
+        String requestId = resolveRequestId(request);
+
+        return ResponseEntity.badRequest()
+                .body(ApiResponse.fail(
+                        ErrorCode.VALIDATION_ERROR.name(),
+                        "File size exceeds the 20MB limit",
+                        null,
                         requestId
                 ));
     }
