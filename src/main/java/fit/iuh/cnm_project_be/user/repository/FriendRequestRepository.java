@@ -22,4 +22,11 @@ public interface FriendRequestRepository
     boolean existsBySenderIdAndReceiverIdAndStatus(UUID senderId, UUID receiverId, FriendRequestStatus status);
 
     Optional<FriendRequest> findByIdAndReceiverId(Long id, UUID receiverId);
+
+    List<FriendRequest> findBySenderIdAndReceiverIdAndStatus(
+            UUID senderId,
+            UUID receiverId,
+            FriendRequestStatus status
+    );
+
 }
