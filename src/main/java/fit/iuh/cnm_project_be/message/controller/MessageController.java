@@ -6,7 +6,7 @@ import fit.iuh.cnm_project_be.message.dto.EditMessageRequest;
 import fit.iuh.cnm_project_be.message.dto.MessageReactionRequest;
 import fit.iuh.cnm_project_be.message.dto.MessageResponse;
 import fit.iuh.cnm_project_be.message.dto.SendMessageRequest;
-import fit.iuh.cnm_project_be.message.dto.TypingRequest;
+import fit.iuh.cnm_project_be.message.dto.TypingRealtimePayload;
 import fit.iuh.cnm_project_be.message.dto.UploadAttachmentResponse;
 import fit.iuh.cnm_project_be.realtime.dto.RealtimeEvent;
 import fit.iuh.cnm_project_be.realtime.dto.RealtimeEventType;
@@ -14,6 +14,7 @@ import fit.iuh.cnm_project_be.message.enums.MessageDeliveryStatus;
 import fit.iuh.cnm_project_be.message.service.MessageService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.http.MediaType;
 import org.springframework.web.multipart.MultipartFile;
@@ -24,6 +25,7 @@ import java.util.UUID;
 @RestController
 @RequestMapping("/api/v1/messages")
 @RequiredArgsConstructor
+@Slf4j
 public class MessageController {
 
     private final MessageService messageService;
@@ -68,9 +70,14 @@ public class MessageController {
             @RequestParam boolean isTyping,
             @RequestHeader("x-user-id") UUID currentUserId) {
 
+        log.info("[BE TYPING RECEIVE] conversationId={} userId={} isTyping={}",
+                conversationId, currentUserId, isTyping);
         messageService.assertConversationAccess(conversationId, currentUserId);
-        TypingRequest payload = new TypingRequest(currentUserId, isTyping);
-        messagingTemplate.convertAndSend("/topic/typing/" + conversationId,
+        TypingRealtimePayload payload =
+                messageService.buildTypingRealtimePayload(conversationId, currentUserId, isTyping);
+        String topic = "/topic/typing/" + conversationId;
+        log.info("[BE TYPING BROADCAST] topic={} payload={}", topic, payload);
+        messagingTemplate.convertAndSend(topic,
                 RealtimeEvent.of(RealtimeEventType.TYPING_UPDATED, payload));
 
         return ApiResponse.ok(null, UUID.randomUUID().toString());
