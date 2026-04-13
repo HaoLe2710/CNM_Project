@@ -15,6 +15,7 @@ import fit.iuh.cnm_project_be.message.dto.MessageResponse;
 import fit.iuh.cnm_project_be.message.dto.MessageStatusPayload;
 import fit.iuh.cnm_project_be.message.dto.ReplyInfo;
 import fit.iuh.cnm_project_be.message.dto.SendMessageRequest;
+import fit.iuh.cnm_project_be.message.dto.TypingRealtimePayload;
 import fit.iuh.cnm_project_be.message.dto.UploadAttachmentResponse;
 import fit.iuh.cnm_project_be.message.entity.Message;
 import fit.iuh.cnm_project_be.message.entity.MessageAttachment;
@@ -321,6 +322,55 @@ public class MessageService {
     public void assertConversationAccess(UUID conversationId, UUID userId) {
         getConversationOrThrow(conversationId);
         ensureConversationMember(conversationId, userId);
+    }
+
+    @Transactional(readOnly = true)
+    public TypingRealtimePayload buildTypingRealtimePayload(UUID conversationId, UUID userId, boolean isTyping) {
+        String displayName = userProfileRepository.findById(userId)
+                .filter(profile -> !profile.isDeleted())
+                .map(this::resolveUserDisplayName)
+                .orElse(userId.toString());
+
+        return TypingRealtimePayload.builder()
+                .conversationId(conversationId)
+                .userId(userId)
+                .senderId(userId)
+                .isTyping(isTyping)
+                .displayName(displayName)
+                .build();
+    }
+
+    private String resolveUserDisplayName(UserProfile userProfile) {
+        if (userProfile == null) {
+            return null;
+        }
+
+        String displayName = userProfile.getDisplayName();
+        if (displayName != null && !displayName.isBlank()) {
+            return displayName;
+        }
+
+        String fullName = resolveFullName(userProfile);
+        if (fullName != null) {
+            return fullName;
+        }
+
+        String username = userProfile.getUsername();
+        if (username != null && !username.isBlank()) {
+            return username;
+        }
+
+        return userProfile.getUserId() != null ? userProfile.getUserId().toString() : null;
+    }
+
+    private String resolveFullName(UserProfile userProfile) {
+        String firstName = userProfile.getFirstName();
+        String lastName = userProfile.getLastName();
+
+        String fullName = String.join(" ",
+                firstName != null ? firstName.trim() : "",
+                lastName != null ? lastName.trim() : "").trim();
+        return fullName.isEmpty() ? null : fullName;
     }
 
     private List<MessageResponse> mapToResponses(List<Message> messages, UUID currentUserId) {
