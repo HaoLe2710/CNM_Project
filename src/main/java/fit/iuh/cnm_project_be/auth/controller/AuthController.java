@@ -2,6 +2,8 @@
 package fit.iuh.cnm_project_be.auth.controller;
 
 import fit.iuh.cnm_project_be.auth.dto.request.ConfirmPasswordChangeRequest;
+import fit.iuh.cnm_project_be.auth.dto.request.DeviceLoginApprovalRequest;
+import fit.iuh.cnm_project_be.auth.dto.request.DeviceLoginRequest;
 import fit.iuh.cnm_project_be.auth.dto.request.ForgotPasswordResetRequest;
 import fit.iuh.cnm_project_be.auth.dto.request.ForgotPasswordSendOtpRequest;
 import fit.iuh.cnm_project_be.auth.dto.request.ForgotPasswordVerifyOtpRequest;
@@ -12,6 +14,8 @@ import fit.iuh.cnm_project_be.auth.dto.request.VerifyCurrentPasswordRequest;
 import fit.iuh.cnm_project_be.auth.dto.request.VerifyOtpRequest;
 import fit.iuh.cnm_project_be.auth.dto.request.LogoutDeviceRequest;
 import fit.iuh.cnm_project_be.auth.dto.response.ForgotPasswordVerifyOtpResponse;
+import fit.iuh.cnm_project_be.auth.dto.response.DeviceLoginQrResponse;
+import fit.iuh.cnm_project_be.auth.dto.response.DeviceLoginStatusResponse;
 import fit.iuh.cnm_project_be.auth.dto.response.LoginResponse;
 import fit.iuh.cnm_project_be.auth.dto.response.RefreshTokenResponse;
 import fit.iuh.cnm_project_be.auth.dto.response.VerifyPasswordResponse;
@@ -48,28 +52,37 @@ public class AuthController {
     PasswordService passwordService;
 
 
-    // ==== DEVICE LOGIN APPROVAL FLOW ====
-//
-//    @GetMapping("/device-login/pending-requests")
-//    public ApiResponse<List<?>> getPendingDeviceLoginRequests() {
-//        UUID userId = getCurrentUserId();
-//        List<?> pending = authServicegetPendingDeviceLoginRequests(userId);
-//        return ApiResponse.ok(pending, UUID.randomUUID().toString());
-//    }
-//
-//    @PostMapping("/device-login/approve")
-//    public ApiResponse<String> approveDeviceLogin(@RequestParam String deviceId, @RequestParam String platform) {
-//        UUID userId = getCurrentUserId();
-//        authService.approveDeviceLogin(userId, deviceId, platform);
-//        return ApiResponse.ok("Device login approved", UUID.randomUUID().toString());
-//    }
-//
-//    @PostMapping("/device-login/deny")
-//    public ApiResponse<String> denyDeviceLogin(@RequestParam String deviceId, @RequestParam String platform) {
-//        UUID userId = getCurrentUserId();
-//        authService.denyDeviceLogin(userId, deviceId, platform);
-//        return ApiResponse.ok("Device login denied", UUID.randomUUID().toString());
-//    }
+    @PostMapping("/device-login-request")
+    public ApiResponse<DeviceLoginQrResponse> createDeviceLoginRequest(
+            @RequestBody @Valid DeviceLoginRequest request
+    ) {
+        return ApiResponse.ok(
+                authService.createDeviceLoginRequest(request),
+                UUID.randomUUID().toString()
+        );
+    }
+
+    @GetMapping("/device-login-status/{approvalId}")
+    public ApiResponse<DeviceLoginStatusResponse> getDeviceLoginStatus(
+            @PathVariable String approvalId,
+            HttpServletResponse response
+    ) {
+        return ApiResponse.ok(
+                authService.getDeviceLoginStatus(approvalId, response),
+                UUID.randomUUID().toString()
+        );
+    }
+
+    @PostMapping("/device-login-approval")
+    public ApiResponse<DeviceLoginStatusResponse> approveDeviceLogin(
+            @RequestBody @Valid DeviceLoginApprovalRequest request
+    ) {
+        UUID userId = getCurrentUserId();
+        return ApiResponse.ok(
+                authService.approveDeviceLogin(userId, request),
+                UUID.randomUUID().toString()
+        );
+    }
     @PostMapping("/register")
     public ApiResponse<?> register(
             @RequestBody @Valid RegisterRequest registerRequest) {

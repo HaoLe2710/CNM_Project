@@ -2,6 +2,10 @@ package fit.iuh.cnm_project_be.auth.service;
 
 import fit.iuh.cnm_project_be.auth.dto.request.LoginRequest;
 import fit.iuh.cnm_project_be.auth.dto.request.RegisterRequest;
+import fit.iuh.cnm_project_be.auth.dto.request.DeviceLoginApprovalRequest;
+import fit.iuh.cnm_project_be.auth.dto.request.DeviceLoginRequest;
+import fit.iuh.cnm_project_be.auth.dto.response.DeviceLoginQrResponse;
+import fit.iuh.cnm_project_be.auth.dto.response.DeviceLoginStatusResponse;
 import fit.iuh.cnm_project_be.auth.dto.response.LoginResponse;
 import fit.iuh.cnm_project_be.auth.dto.response.RegisterResponse;
 import fit.iuh.cnm_project_be.auth.dto.response.RefreshTokenResponse;
@@ -40,6 +44,7 @@ import java.util.stream.Collectors;
 public class AuthService {
 
     LoginService loginService;
+    DeviceLoginService deviceLoginService;
     AuthRefreshService authRefreshService;
     LogoutService logoutService;
     RegistrationService registrationService;
@@ -51,6 +56,18 @@ public class AuthService {
      */
     public LoginResponse login(LoginRequest request, HttpServletResponse response) {
         return loginService.login(request, response);
+    }
+
+    public DeviceLoginQrResponse createDeviceLoginRequest(DeviceLoginRequest request) {
+        return deviceLoginService.createRequest(request);
+    }
+
+    public DeviceLoginStatusResponse getDeviceLoginStatus(String approvalId, HttpServletResponse response) {
+        return deviceLoginService.getStatus(approvalId, response);
+    }
+
+    public DeviceLoginStatusResponse approveDeviceLogin(UUID userId, DeviceLoginApprovalRequest request) {
+        return deviceLoginService.approve(userId, request);
     }
 
     /**

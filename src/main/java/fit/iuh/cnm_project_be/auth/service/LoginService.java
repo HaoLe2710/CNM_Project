@@ -18,13 +18,6 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Duration;
 
-/**
- * Service xử lý logic Login
- * - Verify tài khoản và mật khẩu
- * - Generate tokens
- * - Lưu session
- * - Set cookies
- */
 @Service
 @FieldDefaults(level = AccessLevel.PRIVATE, makeFinal = true)
 @AllArgsConstructor
@@ -38,12 +31,12 @@ public class LoginService {
     UserDeviceService userDeviceService;
     TokenCookieService tokenCookieService;
     TokenRedisService tokenRedisService;
+    DeviceLoginService deviceLoginService;
 
     @Transactional
     public LoginResponse login(LoginRequest request, HttpServletResponse response) {
         String username = request.getUsername().trim();
 
-        // 1. Verify Account
         Account account = accountRepository.findByEmailOrPhone(username, username)
                 .orElseThrow(() -> new UnauthorizedException("Account does not exist"));
 
@@ -53,7 +46,16 @@ public class LoginService {
 
         String platform = request.getPlatform().toString().toLowerCase();
 
-        // 2. Update Device Info
+        if (deviceLoginService.shouldRequireApproval(
+                account.getUserId(),
+                request.getDeviceId(),
+                request.getPlatform())
+        ) {
+            log.info("[Login] - Approval required for user {} on new device {} ({})",
+                    account.getUserId(), request.getDeviceId(), request.getPlatform());
+            return deviceLoginService.createCredentialApprovalRequest(account, request);
+        }
+
         userDeviceService.saveOrUpdateDevice(
                 account.getUserId(),
                 request.getDeviceId(),
@@ -61,15 +63,17 @@ public class LoginService {
                 request.getDeviceName()
         );
 
-        // 3. Generate Tokens
         String accessToken = jwtUtils.generateToken(account, request.getDeviceId(), platform);
         String refreshToken = jwtUtils.generateRefreshToken();
 
-        // 4. Save Refresh Token to Redis
         tokenRedisService.saveRefreshToken(account.getUserId(), platform, refreshToken);
 
-        // 5. Set Cookies
-        tokenCookieService.setTokenToCookie(response, "accessToken", accessToken, Duration.ofMinutes(ACCESS_TOKEN_EXPIRE_MINUTES));
+        tokenCookieService.setTokenToCookie(
+                response,
+                "accessToken",
+                accessToken,
+                Duration.ofMinutes(ACCESS_TOKEN_EXPIRE_MINUTES)
+        );
         tokenCookieService.setTokenToCookie(response, "refreshToken", refreshToken, Duration.ofDays(30));
 
         log.info("[Login] - User {} logged in successfully on platform {}", account.getUserId(), platform);
@@ -79,6 +83,9 @@ public class LoginService {
                 .phone(account.getPhone())
                 .userId(account.getUserId())
                 .roles(account.getRoles())
+                .status("SUCCESS")
+                .deviceName(request.getDeviceName())
+                .platform(request.getPlatform().name())
                 .build();
     }
 }

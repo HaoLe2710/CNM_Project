@@ -1,6 +1,8 @@
 package fit.iuh.cnm_project_be.auth.dto.request;
 
+import fit.iuh.cnm_project_be.user.enums.Platform;
 import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.NotNull;
 import lombok.AccessLevel;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
@@ -13,10 +15,12 @@ import lombok.experimental.FieldDefaults;
 @NoArgsConstructor
 @AllArgsConstructor
 @FieldDefaults(level = AccessLevel.PRIVATE)
-public class DeviceLoginApprovalRequest {
-    @NotBlank(message = "Request ID cannot be empty")
-    String requestId;
+public class DeviceLoginRequest {
+    @NotBlank(message = "Device ID cannot be empty")
+    String deviceId;
 
-    @NotBlank(message = "Approval status cannot be empty")
-    String status;
+    @NotNull(message = "Platform cannot be empty")
+    Platform platform;
+
+    String deviceName;
 }
