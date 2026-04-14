@@ -216,8 +216,7 @@ public class ConversationService {
                 actorUserId,
                 muted,
                 ConversationUserSetting::getMutedAt,
-                ConversationUserSetting::setMutedAt
-        );
+                ConversationUserSetting::setMutedAt);
     }
 
     @Transactional
@@ -229,8 +228,7 @@ public class ConversationService {
                 actorUserId,
                 archived,
                 ConversationUserSetting::getArchivedAt,
-                ConversationUserSetting::setArchivedAt
-        );
+                ConversationUserSetting::setArchivedAt);
     }
 
     @Transactional
@@ -242,17 +240,18 @@ public class ConversationService {
                 actorUserId,
                 pinned,
                 ConversationUserSetting::getPinnedAt,
-                ConversationUserSetting::setPinnedAt
-        );
+                ConversationUserSetting::setPinnedAt);
     }
 
     @Transactional
-    public void updateNotificationLevel(UUID conversationId, UUID actorUserId, ConversationNotificationLevel notificationLevel) {
+    public void updateNotificationLevel(UUID conversationId, UUID actorUserId,
+            ConversationNotificationLevel notificationLevel) {
         Conversation conversation = getConversationOrThrow(conversationId);
         ensureConversationMember(conversationId, actorUserId);
 
         ConversationNotificationLevel normalizedLevel = normalizeNotificationLevel(notificationLevel);
-        ConversationUserSetting setting = conversationUserSettingRepository.findByConversationIdAndUserId(conversationId, actorUserId)
+        ConversationUserSetting setting = conversationUserSettingRepository
+                .findByConversationIdAndUserId(conversationId, actorUserId)
                 .orElse(null);
         ConversationNotificationLevel currentLevel = resolveNotificationLevel(setting);
 
@@ -276,7 +275,8 @@ public class ConversationService {
         ensureConversationMember(conversationId, actorUserId);
 
         String normalizedCustomName = normalizeCustomName(customName);
-        ConversationUserSetting setting = conversationUserSettingRepository.findByConversationIdAndUserId(conversationId, actorUserId)
+        ConversationUserSetting setting = conversationUserSettingRepository
+                .findByConversationIdAndUserId(conversationId, actorUserId)
                 .orElse(null);
         String currentCustomName = setting != null ? setting.getCustomName() : null;
 
@@ -370,8 +370,7 @@ public class ConversationService {
         return mapToResponse(
                 conv,
                 userId,
-                conversationUserSettingRepository.findByConversationIdAndUserId(conv.getId(), userId).orElse(null)
-        );
+                conversationUserSettingRepository.findByConversationIdAndUserId(conv.getId(), userId).orElse(null));
     }
 
     private ConversationResponse mapToResponse(Conversation conv, UUID userId, ConversationUserSetting setting) {
@@ -395,14 +394,18 @@ public class ConversationService {
                 .notificationLevel(resolveNotificationLevel(setting))
                 .customName(setting != null ? setting.getCustomName() : null)
                 .displayName(displayName)
+
                 .peerUserId(privatePeerInfo.userId())
                 .peerDisplayName(privatePeerInfo.displayName())
                 .peerAvatarUrl(privatePeerInfo.avatarUrl())
+
                 .build();
     }
 
-    private List<ConversationResponse> mapConversationResponses(List<Conversation> conversations, UUID userId, boolean archived) {
-        Map<UUID, ConversationUserSetting> settingsByConversationId = getSettingsByConversationId(conversations, userId);
+    private List<ConversationResponse> mapConversationResponses(List<Conversation> conversations, UUID userId,
+            boolean archived) {
+        Map<UUID, ConversationUserSetting> settingsByConversationId = getSettingsByConversationId(conversations,
+                userId);
 
         return conversations.stream()
                 .filter(conversation -> {
@@ -412,12 +415,12 @@ public class ConversationService {
                 })
                 .map(conversation -> new ConversationWithPreference(
                         mapToResponse(conversation, userId, settingsByConversationId.get(conversation.getId())),
-                        settingsByConversationId.get(conversation.getId())
-                ))
+                        settingsByConversationId.get(conversation.getId())))
                 .sorted(Comparator
                         .comparing(ConversationWithPreference::isPinned)
                         .reversed()
-                        .thenComparing(item -> item.response().getLastMessageTime(), Comparator.nullsLast(Comparator.reverseOrder())))
+                        .thenComparing(item -> item.response().getLastMessageTime(),
+                                Comparator.nullsLast(Comparator.reverseOrder())))
                 .map(ConversationWithPreference::response)
                 .toList();
     }
@@ -443,11 +446,13 @@ public class ConversationService {
         return participantIds;
     }
 
-    private ConversationResponse createNewConversation(UUID creatorId, CreateConversationRequest request, Set<UUID> participantIds) {
+    private ConversationResponse createNewConversation(UUID creatorId, CreateConversationRequest request,
+            Set<UUID> participantIds) {
         Conversation conversation = new Conversation();
         conversation.setCreatorId(creatorId);
         conversation.setType(request.getType());
-        conversation.setName(request.getType() == ConversationType.GROUP ? normalizeConversationName(request.getName()) : null);
+        conversation.setName(
+                request.getType() == ConversationType.GROUP ? normalizeConversationName(request.getName()) : null);
         Conversation savedConversation = conversationRepository.save(conversation);
 
         for (UUID participantId : participantIds) {
@@ -459,18 +464,15 @@ public class ConversationService {
         }
 
         ConversationResponse creatorResponse = mapToResponse(savedConversation, creatorId);
-        participantIds.forEach(userId ->
-                messagingTemplate.convertAndSend(
-                        "/topic/users/" + userId + "/conversations",
-                        RealtimeEvent.of(RealtimeEventType.CONVERSATION_UPDATED, mapToResponse(savedConversation, userId))
-                ));
+        participantIds.forEach(userId -> messagingTemplate.convertAndSend(
+                "/topic/users/" + userId + "/conversations",
+                RealtimeEvent.of(RealtimeEventType.CONVERSATION_UPDATED, mapToResponse(savedConversation, userId))));
         return creatorResponse;
     }
 
     private void broadcastConversationUpdates(UUID conversationId) {
         Conversation conversation = getConversationOrThrow(conversationId);
-        conversationMemberRepository.findByConversationId(conversationId).forEach(member ->
-        {
+        conversationMemberRepository.findByConversationId(conversationId).forEach(member -> {
             ConversationUserSetting setting = findConversationUserSetting(conversationId, member.getUserId());
             if (!shouldDeliverConversationRefresh(setting)) {
                 return;
@@ -484,8 +486,8 @@ public class ConversationService {
 
     private void broadcastConversationDeleted(UUID conversationId, List<ConversationMember> members) {
         ConversationStatusPayload payload = new ConversationStatusPayload(conversationId, "DELETED");
-        members.forEach(member ->
-                messagingTemplate.convertAndSend("/topic/users/" + member.getUserId() + "/conversations",
+        members.forEach(
+                member -> messagingTemplate.convertAndSend("/topic/users/" + member.getUserId() + "/conversations",
                         RealtimeEvent.of(RealtimeEventType.CONVERSATION_UPDATED, payload)));
     }
 
@@ -507,7 +509,8 @@ public class ConversationService {
         conversationRepository.save(conversation);
     }
 
-    private Map<UUID, ConversationUserSetting> getSettingsByConversationId(List<Conversation> conversations, UUID userId) {
+    private Map<UUID, ConversationUserSetting> getSettingsByConversationId(List<Conversation> conversations,
+            UUID userId) {
         if (conversations.isEmpty()) {
             return Map.of();
         }
@@ -616,7 +619,8 @@ public class ConversationService {
         }
 
         // Mention-aware notification filtering is intentionally deferred.
-        // Until mentions are implemented, MENTIONS_ONLY preserves the current ALL behavior.
+        // Until mentions are implemented, MENTIONS_ONLY preserves the current ALL
+        // behavior.
         return true;
     }
 
@@ -668,10 +672,7 @@ public class ConversationService {
             return PrivatePeerInfo.empty();
         }
 
-        return conversationMemberRepository.findByConversationId(conversation.getId()).stream()
-                .map(ConversationMember::getUserId)
-                .filter(memberUserId -> !memberUserId.equals(userId))
-                .findFirst()
+        return conversationMemberRepository.findPartnerUserId(conversation.getId(), userId)
                 .flatMap(userProfileRepository::findById)
                 .filter(userProfile -> !userProfile.isDeleted())
                 .map(userProfile -> new PrivatePeerInfo(
@@ -721,7 +722,8 @@ public class ConversationService {
             java.util.function.Function<ConversationUserSetting, Instant> getter,
             java.util.function.BiConsumer<ConversationUserSetting, Instant> setter) {
 
-        ConversationUserSetting setting = conversationUserSettingRepository.findByConversationIdAndUserId(conversationId, userId)
+        ConversationUserSetting setting = conversationUserSettingRepository
+                .findByConversationIdAndUserId(conversationId, userId)
                 .orElse(null);
 
         if (setting == null && !enabled) {
@@ -757,6 +759,5 @@ public class ConversationService {
             return new PrivatePeerInfo(null, null, null);
         }
     }
-
 
 }
