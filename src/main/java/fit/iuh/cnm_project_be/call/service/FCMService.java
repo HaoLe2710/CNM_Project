@@ -12,27 +12,28 @@ import org.springframework.stereotype.Service;
 @Service
 public class FCMService {
 
-    @Value("${sfu.url}")
+    // @Value("${sfu.url}")
+    @Value("${app.sfu.url}")
     private String sfuUrl;
 
     public void sendCallNotification(String fcmToken, String callerName,
-                                      String callId, String roomId) {
+            String callId, String roomId) {
         Message message = Message.builder()
-            .setToken(fcmToken)
-            .putData("type", "INCOMING_CALL")
-            .putData("callId", callId)
-            .putData("callerName", callerName)
-            .putData("roomId", roomId)
-            .putData("sfuUrl", sfuUrl)
-            .setAndroidConfig(AndroidConfig.builder()
-                .setPriority(AndroidConfig.Priority.HIGH)
-                .build())
-            .build();
+                .setToken(fcmToken)
+                .putData("type", "INCOMING_CALL")
+                .putData("callId", callId)
+                .putData("callerName", callerName)
+                .putData("roomId", roomId)
+                .putData("sfuUrl", sfuUrl)
+                .setAndroidConfig(AndroidConfig.builder()
+                        .setPriority(AndroidConfig.Priority.HIGH)
+                        .build())
+                .build();
 
         try {
             FirebaseMessaging.getInstance().send(message);
-        } catch (FirebaseMessagingException e) {
-            log.error("Gửi FCM thất bại", e);
+        } catch (Exception e) {
+            log.error("Gửi FCM thất bại (Token có thể không hợp lệ): {}", e.getMessage());
         }
     }
 }

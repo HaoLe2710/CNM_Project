@@ -59,6 +59,8 @@ public class SecurityConfig {
     private static final String[] PUBLIC_END_POINT = {
             "/api/v1/test/**",
             "/api/v1/auth/**",
+            "/ws/**",
+            "/auth/ws/**",
     };
 
     @Bean
@@ -218,6 +220,7 @@ public class SecurityConfig {
         return new WebMvcConfigurer() {
             @Override
             public void addCorsMappings(CorsRegistry registry) {
+                // Thêm CORS cho API
                 registry.addMapping("/api/**")
                     .allowedOriginPatterns(
                         "http://localhost:*",
@@ -225,10 +228,35 @@ public class SecurityConfig {
                         "http://192.168.*:*",
                         "http://10.*:*"
                     )
-                        .allowedMethods("GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH")
-                        .allowedHeaders("*")
-                        .allowCredentials(true)
-                        .maxAge(3600);
+                    .allowedMethods("GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH")
+                    .allowedHeaders("*")
+                    .allowCredentials(true)
+                    .maxAge(3600);
+
+                // Thêm CORS cho WebSocket endpoints (cần cho SockJS handshake)
+                registry.addMapping("/ws/**")
+                    .allowedOriginPatterns(
+                        "http://localhost:*",
+                        "http://127.0.0.1:*",
+                        "http://192.168.*:*",
+                        "http://10.*:*"
+                    )
+                    .allowedMethods("GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH")
+                    .allowedHeaders("*")
+                    .allowCredentials(true)
+                    .maxAge(3600);
+
+                registry.addMapping("/auth/ws/**")
+                    .allowedOriginPatterns(
+                        "http://localhost:*",
+                        "http://127.0.0.1:*",
+                        "http://192.168.*:*",
+                        "http://10.*:*"
+                    )
+                    .allowedMethods("GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH")
+                    .allowedHeaders("*")
+                    .allowCredentials(true)
+                    .maxAge(3600);
             }
         };
     }

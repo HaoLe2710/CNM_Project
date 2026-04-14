@@ -30,4 +30,5 @@ public class ConversationResponse {
     private UUID peerUserId;
     private String peerDisplayName;
     private String peerAvatarUrl;
+
 }

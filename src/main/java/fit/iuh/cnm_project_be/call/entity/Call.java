@@ -2,6 +2,8 @@ package fit.iuh.cnm_project_be.call.entity;
 
 import fit.iuh.cnm_project_be.call.enums.CallStatus;
 import fit.iuh.cnm_project_be.call.enums.CallType;
+import fit.iuh.cnm_project_be.call.persistence.CallStatusConverter;
+import fit.iuh.cnm_project_be.call.persistence.CallTypeConverter;
 import jakarta.persistence.*;
 import lombok.Getter;
 import lombok.Setter;
@@ -26,11 +28,11 @@ public class Call {
     @Column(name = "channel", nullable = false)
     private String channel;
 
-    @Enumerated(EnumType.STRING)
+    @Convert(converter = CallStatusConverter.class)
     @Column(name = "status", nullable = false)
     private CallStatus status;
 
-    @Enumerated(EnumType.STRING)
+    @Convert(converter = CallTypeConverter.class)
     private CallType type;
 
     @Column(name = "started_at", nullable = false)

@@ -119,7 +119,7 @@ public class UserController {
     public ResponseEntity<Void> updateFcmToken(
             @AuthenticationPrincipal Jwt jwt,
             @RequestBody Map<String, String> body) {
-        UUID userId = UUID.fromString(jwt.getSubject()); // subject = userId???Nhớ check lại cấu hình JWT
+        UUID userId = UUID.fromString(jwt.getClaimAsString("userId"));
         userService.updateFcmToken(userId, body.get("token"));
         return ResponseEntity.ok().build();
     }

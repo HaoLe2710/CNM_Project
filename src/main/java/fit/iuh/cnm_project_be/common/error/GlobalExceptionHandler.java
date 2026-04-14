@@ -4,6 +4,7 @@ import fit.iuh.cnm_project_be.common.api.ApiResponse;
 import fit.iuh.cnm_project_be.common.exception.ApiException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.ConstraintViolationException;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.multipart.MaxUploadSizeExceededException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
@@ -36,6 +37,7 @@ public class GlobalExceptionHandler {
         ErrorCode code = ex.getErrorCode();
 
         return ResponseEntity.status(code.status())
+                .contentType(MediaType.APPLICATION_JSON)
                 .body(ApiResponse.fail(
                         code.name(),
                         ex.getMessage(),
@@ -64,6 +66,7 @@ public class GlobalExceptionHandler {
                 .toList();
 
         return ResponseEntity.badRequest()
+                .contentType(MediaType.APPLICATION_JSON)
                 .body(ApiResponse.fail(
                         ErrorCode.VALIDATION_ERROR.name(),
                         ErrorCode.VALIDATION_ERROR.defaultMessage(),
@@ -91,6 +94,7 @@ public class GlobalExceptionHandler {
                 .toList();
 
         return ResponseEntity.badRequest()
+                .contentType(MediaType.APPLICATION_JSON)
                 .body(ApiResponse.fail(
                         ErrorCode.VALIDATION_ERROR.name(),
                         ErrorCode.VALIDATION_ERROR.defaultMessage(),
@@ -128,6 +132,7 @@ public class GlobalExceptionHandler {
         // TODO: log.error("Unexpected error", ex);
 
         return ResponseEntity.status(ErrorCode.INTERNAL_ERROR.status())
+                .contentType(MediaType.APPLICATION_JSON)
                 .body(ApiResponse.fail(
                         ErrorCode.INTERNAL_ERROR.name(),
                         ErrorCode.INTERNAL_ERROR.defaultMessage(),

@@ -13,49 +13,51 @@ import java.util.UUID;
 
 @Repository
 public interface MessageRepository extends SoftDeleteRepository<Message, Long> {
-    @Query("""
-            select m from Message m
-            where m.conversationId = :conversationId
-              and m.deletedAt is null
-              and not exists (
-                    select 1 from MessageUserState state
-                    where state.messageId = m.id
-                      and state.userId = :userId
-                      and (state.hiddenAt is not null or state.deletedForMeAt is not null)
-              )
-            order by m.createdAt desc, m.id desc
-            """)
-    List<Message> findVisibleMessages(
-            @Param("conversationId") UUID conversationId,
-            @Param("userId") UUID userId,
-            Pageable pageable);
+        @Query("""
+                        select m from Message m
+                        where m.conversationId = :conversationId
+                          and m.deletedAt is null
+                          and not exists (
+                                select 1 from MessageUserState state
+                                where state.messageId = m.id
+                                  and state.userId = :userId
+                                  and (state.hiddenAt is not null or state.deletedForMeAt is not null)
+                          )
+                        order by m.createdAt desc, m.id desc
+                        """)
+        List<Message> findVisibleMessages(
+                        @Param("conversationId") UUID conversationId,
+                        @Param("userId") UUID userId,
+                        Pageable pageable);
 
-    @Query("""
-            select m from Message m
-            where m.conversationId = :conversationId
-              and m.deletedAt is null
-              and not exists (
-                    select 1 from MessageUserState state
-                    where state.messageId = m.id
-                      and state.userId = :userId
-                      and (state.hiddenAt is not null or state.deletedForMeAt is not null)
-              )
-              and (
-                    m.createdAt < :cursorCreatedAt
-                    or (m.createdAt = :cursorCreatedAt and m.id < :cursorMessageId)
-              )
-            order by m.createdAt desc, m.id desc
-            """)
-    List<Message> findVisibleMessagesBeforeCursor(
-            @Param("conversationId") UUID conversationId,
-            @Param("userId") UUID userId,
-            @Param("cursorCreatedAt") java.time.Instant cursorCreatedAt,
-            @Param("cursorMessageId") Long cursorMessageId,
-            Pageable pageable);
+        @Query("""
+                        select m from Message m
+                        where m.conversationId = :conversationId
+                          and m.deletedAt is null
+                          and not exists (
+                                select 1 from MessageUserState state
+                                where state.messageId = m.id
+                                  and state.userId = :userId
+                                  and (state.hiddenAt is not null or state.deletedForMeAt is not null)
+                          )
+                          and (
+                                m.createdAt < :cursorCreatedAt
 
-    List<Message> findTop50ByConversationIdAndDeletedAtIsNullOrderByCreatedAtDesc(UUID conversationId);
 
-    List<Message> findByConversationIdAndDeletedAtIsNullOrderByCreatedAtAsc(UUID conversationId);
+                                or (m.createdAt = :cursorCreatedAt and m.id < :cursorMessageId)
+                          )
+                        order by m.createdAt desc, m.id desc
+                        """)
+        List<Message> findVisibleMessagesBeforeCursor(
+                        @Param("conversationId") UUID conversationId,
+                        @Param("userId") UUID userId,
+                        @Param("cursorCreatedAt") java.time.Instant cursorCreatedAt,
+                        @Param("cursorMessageId") Long cursorMessageId,
+                        Pageable pageable);
 
-    Optional<Message> findByIdAndDeletedAtIsNull(Long id);
+        List<Message> findTop50ByConversationIdAndDeletedAtIsNullOrderByCreatedAtDesc(UUID conversationId);
+
+        List<Message> findByConversationIdAndDeletedAtIsNullOrderByCreatedAtAsc(UUID conversationId);
+
+        Optional<Message> findByIdAndDeletedAtIsNull(Long id);
 }
