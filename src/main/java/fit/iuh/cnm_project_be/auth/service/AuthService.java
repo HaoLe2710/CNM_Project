@@ -2,6 +2,10 @@ package fit.iuh.cnm_project_be.auth.service;
 
 import fit.iuh.cnm_project_be.auth.dto.request.LoginRequest;
 import fit.iuh.cnm_project_be.auth.dto.request.RegisterRequest;
+import fit.iuh.cnm_project_be.auth.dto.request.DeviceLoginApprovalRequest;
+import fit.iuh.cnm_project_be.auth.dto.request.DeviceLoginRequest;
+import fit.iuh.cnm_project_be.auth.dto.response.DeviceLoginQrResponse;
+import fit.iuh.cnm_project_be.auth.dto.response.DeviceLoginStatusResponse;
 import fit.iuh.cnm_project_be.auth.dto.response.LoginResponse;
 import fit.iuh.cnm_project_be.auth.dto.response.RegisterResponse;
 import fit.iuh.cnm_project_be.auth.dto.response.RefreshTokenResponse;
@@ -40,6 +44,7 @@ import java.util.stream.Collectors;
 public class AuthService {
 
     LoginService loginService;
+    DeviceLoginService deviceLoginService;
     AuthRefreshService authRefreshService;
     LogoutService logoutService;
     RegistrationService registrationService;
@@ -51,6 +56,18 @@ public class AuthService {
      */
     public LoginResponse login(LoginRequest request, HttpServletResponse response) {
         return loginService.login(request, response);
+    }
+
+    public DeviceLoginQrResponse createDeviceLoginRequest(DeviceLoginRequest request) {
+        return deviceLoginService.createRequest(request);
+    }
+
+    public DeviceLoginStatusResponse getDeviceLoginStatus(String approvalId, HttpServletResponse response) {
+        return deviceLoginService.getStatus(approvalId, response);
+    }
+
+    public DeviceLoginStatusResponse approveDeviceLogin(UUID userId, DeviceLoginApprovalRequest request) {
+        return deviceLoginService.approve(userId, request);
     }
 
     /**
@@ -113,12 +130,29 @@ public class AuthService {
                 .collect(Collectors.toList());
     }
 
+    org.springframework.messaging.simp.SimpMessagingTemplate messagingTemplate;
+
     /**
      * Đăng xuất device cụ thể
      */
     public void logoutDevice(UUID userId, String deviceId, String platform) {
         userDeviceService.deleteDevice(userId, deviceId, platform);
         log.info("[Device Logout] - User {} logged out from device {} on platform {}", userId, deviceId, platform);
+
+        try {
+            String topicName = "/topic/auth/" + userId + "/device-logout";
+            fit.iuh.cnm_project_be.auth.websocket.DeviceAuthWebSocketController.DeviceLogoutMessage response = 
+                    fit.iuh.cnm_project_be.auth.websocket.DeviceAuthWebSocketController.DeviceLogoutMessage.builder()
+                    .deviceId(deviceId)
+                    .platform(platform)
+                    .message("Device logged out successfully")
+                    .timestamp(System.currentTimeMillis())
+                    .build();
+            messagingTemplate.convertAndSend(topicName, response);
+            log.info("[WebSocket] - Logout notification sent to {} for device {}", topicName, deviceId);
+        } catch (Exception e) {
+            log.error("[WebSocket] - Error sending logout notification: {}", e.getMessage(), e);
+        }
     }
 }
 

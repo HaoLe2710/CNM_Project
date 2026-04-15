@@ -11,10 +11,10 @@ import org.springframework.stereotype.Component;
 @ConfigurationProperties(prefix = "app.aws.s3")
 public class AwsS3Properties {
 
-    private String region = "ap-southeast-1";
-    private String bucket= "congnghemoi-zalo-bucket";
-    private String cloudfrontUrl = "d2hm0smllhhb7h.cloudfront.net/";
-    private String accessKeyId ="AKIAQA2XS6H5TTIZLOT7";
-    private String secretAccessKey= "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";
-    private String avatarPathPrefix = "avatars";
+    private String region;
+    private String bucket;
+    private String cloudfrontUrl;
+    private String accessKeyId;
+    private String secretAccessKey;
+    private String avatarPathPrefix;
 }

@@ -91,7 +91,6 @@ public class UserService {
         user.setDisplayName(request.getDisplayName());
         user.setFirstName(request.getFirstName());
         user.setLastName(request.getLastName());
-        user.setAvatarUrl(request.getAvatarUrl());
         user.setBio(request.getBio());
         user.setPhone(request.getPhone());
         user.setGender(request.getGender());

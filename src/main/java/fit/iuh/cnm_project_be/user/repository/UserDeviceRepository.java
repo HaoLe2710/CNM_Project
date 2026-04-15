@@ -4,6 +4,7 @@ import fit.iuh.cnm_project_be.common.repository.BaseRepository;
 import fit.iuh.cnm_project_be.user.entity.UserDevice;
 import fit.iuh.cnm_project_be.user.enums.Platform;
 
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -20,6 +21,8 @@ public interface UserDeviceRepository
     Optional<UserDevice> findByUserIdAndPlatform(UUID userId, Platform platform);
 
     Optional<UserDevice> findByUserIdAndDeviceIdAndPlatform(UUID userId, String deviceId, Platform platform);
+
+    List<UserDevice> findByUserIdAndPlatformIn(UUID userId, Collection<Platform> platforms);
 
     void deleteByUserIdAndDeviceIdAndPlatform(UUID userId, String deviceId, Platform platform);
 }

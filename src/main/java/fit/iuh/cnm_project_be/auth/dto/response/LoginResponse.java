@@ -6,7 +6,6 @@ import lombok.Builder;
 import lombok.Data;
 import lombok.experimental.FieldDefaults;
 
-import java.time.LocalDateTime;
 import java.util.List;
 import java.util.UUID;
 
@@ -18,6 +17,8 @@ public class LoginResponse {
     String phone;
     UUID userId;
     List<Role> roles;
-    String status; // "SUCCESS" hoặc "PENDING_APPROVAL"
+    String status;
     String approvalId;
+    String deviceName;
+    String platform;
 }
