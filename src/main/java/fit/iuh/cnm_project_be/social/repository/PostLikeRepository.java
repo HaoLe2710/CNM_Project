@@ -9,7 +9,9 @@ import java.util.UUID;
 public interface PostLikeRepository
         extends BaseRepository<PostLike, UUID> {
 
-    List<PostLike> findByPostId(UUID postId);
+    List<PostLike> findByPostIdOrderByCreatedAtDesc(UUID postId);
+
+    long countByPostId(UUID postId);
 
     boolean existsByPostIdAndUserId(UUID postId, UUID userId);
 

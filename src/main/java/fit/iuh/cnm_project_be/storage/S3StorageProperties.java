@@ -16,4 +16,7 @@ public class S3StorageProperties {
     private String endpoint;
     private String publicBaseUrl;
     private String pathPrefix = "chat";
+    private long maxImageSizeBytes = 20 * 1024 * 1024L;
+    private long maxVideoSizeBytes = 50 * 1024 * 1024L;
+    private long maxFileSizeBytes = 20 * 1024 * 1024L;
 }
