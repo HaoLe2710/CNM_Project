@@ -1,0 +1,791 @@
+package fit.iuh.cnm_project_be.social.service;
+
+import fit.iuh.cnm_project_be.common.exception.BusinessException;
+import fit.iuh.cnm_project_be.common.exception.NotFoundException;
+import fit.iuh.cnm_project_be.message.dto.UploadAttachmentResponse;
+import fit.iuh.cnm_project_be.message.enums.MessageType;
+import fit.iuh.cnm_project_be.social.dto.request.CreateMomentRequest;
+import fit.iuh.cnm_project_be.social.dto.request.CreatePostCommentRequest;
+import fit.iuh.cnm_project_be.social.dto.request.CreatePostMediaItemRequest;
+import fit.iuh.cnm_project_be.social.dto.request.CreatePostRequest;
+import fit.iuh.cnm_project_be.social.dto.response.MomentResponse;
+import fit.iuh.cnm_project_be.social.dto.response.PostAudienceResponse;
+import fit.iuh.cnm_project_be.social.dto.response.PostCommentResponse;
+import fit.iuh.cnm_project_be.social.dto.response.PostInteractionResponse;
+import fit.iuh.cnm_project_be.social.dto.response.PostLikeResponse;
+import fit.iuh.cnm_project_be.social.dto.response.PostMediaResponse;
+import fit.iuh.cnm_project_be.social.dto.response.PostResponse;
+import fit.iuh.cnm_project_be.social.dto.response.SocialMediaUploadResponse;
+import fit.iuh.cnm_project_be.social.entity.Moment;
+import fit.iuh.cnm_project_be.social.entity.PostComment;
+import fit.iuh.cnm_project_be.social.entity.PostCommentLike;
+import fit.iuh.cnm_project_be.social.entity.PostLike;
+import fit.iuh.cnm_project_be.social.entity.Post;
+import fit.iuh.cnm_project_be.social.entity.PostMedia;
+import fit.iuh.cnm_project_be.social.entity.PostTag;
+import fit.iuh.cnm_project_be.social.entity.PostVisibilityGrant;
+import fit.iuh.cnm_project_be.social.enums.MediaType;
+import fit.iuh.cnm_project_be.social.enums.PostInteractionScope;
+import fit.iuh.cnm_project_be.social.enums.PostVisibilityMode;
+import fit.iuh.cnm_project_be.social.repository.MomentRepository;
+import fit.iuh.cnm_project_be.social.repository.PostCommentRepository;
+import fit.iuh.cnm_project_be.social.repository.PostCommentLikeRepository;
+import fit.iuh.cnm_project_be.social.repository.PostLikeRepository;
+import fit.iuh.cnm_project_be.social.repository.PostMediaRepository;
+import fit.iuh.cnm_project_be.social.repository.PostRepository;
+import fit.iuh.cnm_project_be.social.repository.PostTagRepository;
+import fit.iuh.cnm_project_be.social.repository.PostVisibilityGrantRepository;
+import fit.iuh.cnm_project_be.storage.S3MediaStorageService;
+import fit.iuh.cnm_project_be.user.dto.response.UserSummaryResponse;
+import fit.iuh.cnm_project_be.user.entity.Friendship;
+import fit.iuh.cnm_project_be.user.entity.UserProfile;
+import fit.iuh.cnm_project_be.user.repository.UserBlockRepository;
+import fit.iuh.cnm_project_be.user.repository.FriendshipRepository;
+import fit.iuh.cnm_project_be.user.service.UserService;
+import lombok.RequiredArgsConstructor;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.multipart.MultipartFile;
+
+import java.time.Instant;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Set;
+import java.util.UUID;
+
+@Service
+@RequiredArgsConstructor
+public class SocialService {
+
+    private static final int DEFAULT_PAGE_SIZE = 20;
+    private static final int MAX_PAGE_SIZE = 50;
+    private static final int VIDEO_CANDIDATE_MULTIPLIER = 3;
+
+    private final PostRepository postRepository;
+    private final PostLikeRepository postLikeRepository;
+    private final PostCommentRepository postCommentRepository;
+    private final PostCommentLikeRepository postCommentLikeRepository;
+    private final PostMediaRepository postMediaRepository;
+    private final PostTagRepository postTagRepository;
+    private final PostVisibilityGrantRepository postVisibilityGrantRepository;
+    private final MomentRepository momentRepository;
+    private final FriendshipRepository friendshipRepository;
+    private final UserBlockRepository userBlockRepository;
+    private final UserService userService;
+    private final S3MediaStorageService s3MediaStorageService;
+
+    @Transactional(readOnly = true)
+    public List<PostResponse> getFriendPostFeed(Integer size) {
+        UUID currentUserId = currentUser().getUserId();
+        return postRepository.findByDeletedAtIsNullAndArchivedAtIsNullOrderByCreatedAtDesc(
+                        PageRequest.of(0, normalizeFeedCandidateSize(size)))
+                .stream()
+                .filter(post -> canViewPost(post, currentUserId))
+                .limit(normalizeSize(size))
+                .map(post -> toPostResponse(post, currentUserId))
+                .toList();
+    }
+
+    @Transactional(readOnly = true)
+    public List<PostResponse> getMyPosts(boolean archived, Integer size) {
+        UUID currentUserId = currentUser().getUserId();
+        List<Post> posts = archived
+                ? postRepository.findByUserIdAndDeletedAtIsNullAndArchivedAtIsNotNullOrderByArchivedAtDesc(
+                        currentUserId, PageRequest.of(0, normalizeSize(size)))
+                : postRepository.findByUserIdAndDeletedAtIsNullAndArchivedAtIsNullOrderByCreatedAtDesc(
+                        currentUserId, PageRequest.of(0, normalizeSize(size)));
+        return posts.stream()
+                .map(post -> toPostResponse(post, currentUserId))
+                .toList();
+    }
+
+    @Transactional
+    public PostResponse createPost(CreatePostRequest request) {
+        UserProfile currentUser = currentUser();
+        List<CreatePostMediaItemRequest> mediaItems = validatePostMediaItems(resolveRequestMediaItems(request));
+
+        Post post = new Post();
+        post.setUserId(currentUser.getUserId());
+        post.setImageUrl(mediaItems.getFirst().getMediaUrl().trim());
+        post.setCaption(trimToNull(request.getCaption()));
+        post.setVisibilityMode(request.getVisibilityMode());
+
+        Post savedPost = postRepository.save(post);
+        savePostMedia(savedPost.getId(), mediaItems);
+        syncPostAudience(savedPost, currentUser.getUserId(), request.getAllowedViewerIds(), request.getTaggedFriendIds());
+        return toPostResponse(savedPost, currentUser.getUserId());
+    }
+
+    @Transactional
+    public PostResponse createPost(
+            MultipartFile[] files,
+            String caption,
+            PostVisibilityMode visibilityMode,
+            List<UUID> allowedViewerIds,
+            List<UUID> taggedFriendIds) {
+        UUID currentUserId = currentUser().getUserId();
+        if (files == null || files.length == 0) {
+            throw new BusinessException("Post must contain at least one image or video");
+        }
+
+        List<CreatePostMediaItemRequest> mediaItems = new ArrayList<>();
+        for (MultipartFile file : files) {
+            UploadAttachmentResponse upload = s3MediaStorageService.upload(currentUserId, file);
+            CreatePostMediaItemRequest item = new CreatePostMediaItemRequest();
+            item.setMediaUrl(upload.getUrl());
+            item.setMediaType(toMediaType(upload.getType()));
+            mediaItems.add(item);
+        }
+        mediaItems = validatePostMediaItems(mediaItems);
+
+        Post post = new Post();
+        post.setUserId(currentUserId);
+        post.setImageUrl(mediaItems.getFirst().getMediaUrl());
+        post.setCaption(trimToNull(caption));
+        post.setVisibilityMode(visibilityMode == null ? PostVisibilityMode.ALL_FRIENDS : visibilityMode);
+
+        Post savedPost = postRepository.save(post);
+        savePostMedia(savedPost.getId(), mediaItems);
+        syncPostAudience(savedPost, currentUserId, allowedViewerIds, taggedFriendIds);
+        return toPostResponse(savedPost, currentUserId);
+    }
+
+    @Transactional
+    public PostResponse archivePost(UUID postId) {
+        Post post = getOwnedPost(postId);
+        if (post.getArchivedAt() == null) {
+            post.setArchivedAt(Instant.now());
+        }
+        return toPostResponse(postRepository.save(post), post.getUserId());
+    }
+
+    @Transactional
+    public PostResponse restorePost(UUID postId) {
+        Post post = getOwnedPost(postId);
+        post.setArchivedAt(null);
+        return toPostResponse(postRepository.save(post), post.getUserId());
+    }
+
+    @Transactional
+    public void deletePost(UUID postId) {
+        Post post = getOwnedPost(postId);
+        postMediaRepository.deleteByPostId(postId);
+        postTagRepository.deleteByPostId(postId);
+        postVisibilityGrantRepository.deleteByPostId(postId);
+        postRepository.delete(post);
+    }
+
+    @Transactional
+    public PostResponse likePost(UUID postId) {
+        UUID currentUserId = currentUser().getUserId();
+        Post post = getInteractablePost(postId, currentUserId);
+
+        if (!postLikeRepository.existsByPostIdAndUserId(postId, currentUserId)) {
+            PostLike postLike = new PostLike();
+            postLike.setPostId(postId);
+            postLike.setUserId(currentUserId);
+            postLikeRepository.save(postLike);
+        }
+
+        return toPostResponse(post, currentUserId);
+    }
+
+    @Transactional
+    public PostResponse unlikePost(UUID postId) {
+        UUID currentUserId = currentUser().getUserId();
+        Post post = getInteractablePost(postId, currentUserId);
+        postLikeRepository.deleteByPostIdAndUserId(postId, currentUserId);
+        return toPostResponse(post, currentUserId);
+    }
+
+    @Transactional
+    public PostCommentResponse addComment(UUID postId, CreatePostCommentRequest request) {
+        UUID currentUserId = currentUser().getUserId();
+        getInteractablePost(postId, currentUserId);
+
+        PostComment comment = new PostComment();
+        comment.setPostId(postId);
+        comment.setUserId(currentUserId);
+        comment.setContent(request.getContent().trim());
+
+        return toPostCommentResponse(postCommentRepository.save(comment), currentUserId, List.of());
+    }
+
+    @Transactional
+    public PostCommentResponse replyToComment(UUID parentCommentId, CreatePostCommentRequest request) {
+        UUID currentUserId = currentUser().getUserId();
+        PostComment parentComment = getVisibleComment(parentCommentId, currentUserId);
+        getInteractablePost(parentComment.getPostId(), currentUserId);
+
+        PostComment reply = new PostComment();
+        reply.setPostId(parentComment.getPostId());
+        reply.setUserId(currentUserId);
+        reply.setParentCommentId(parentComment.getId());
+        reply.setContent(request.getContent().trim());
+
+        return toPostCommentResponse(postCommentRepository.save(reply), currentUserId, List.of());
+    }
+
+    @Transactional
+    public PostCommentResponse likeComment(UUID commentId) {
+        UUID currentUserId = currentUser().getUserId();
+        PostComment comment = getVisibleComment(commentId, currentUserId);
+        getInteractablePost(comment.getPostId(), currentUserId);
+
+        if (!postCommentLikeRepository.existsByCommentIdAndUserId(commentId, currentUserId)) {
+            PostCommentLike like = new PostCommentLike();
+            like.setCommentId(commentId);
+            like.setUserId(currentUserId);
+            postCommentLikeRepository.save(like);
+        }
+
+        return toPostCommentResponse(comment, currentUserId, List.of());
+    }
+
+    @Transactional
+    public PostCommentResponse unlikeComment(UUID commentId) {
+        UUID currentUserId = currentUser().getUserId();
+        PostComment comment = getVisibleComment(commentId, currentUserId);
+        getInteractablePost(comment.getPostId(), currentUserId);
+        postCommentLikeRepository.deleteByCommentIdAndUserId(commentId, currentUserId);
+        return toPostCommentResponse(comment, currentUserId, List.of());
+    }
+
+    @Transactional(readOnly = true)
+    public List<PostCommentResponse> getPostComments(UUID postId) {
+        UUID currentUserId = currentUser().getUserId();
+        Post post = getVisiblePost(postId, currentUserId);
+        PostInteractionScope scope = resolveInteractionScope(post, currentUserId);
+        Set<UUID> visibleUserIds = resolveVisibleUserIds(post, currentUserId, scope);
+
+        List<PostComment> allComments = postCommentRepository.findByPostIdAndDeletedAtIsNullOrderByCreatedAtDesc(postId);
+        List<PostComment> visibleComments = allComments.stream()
+                .filter(comment -> canSeeActor(comment.getUserId(), scope, visibleUserIds))
+                .toList();
+
+        return buildCommentTree(visibleComments, null, currentUserId);
+    }
+
+    @Transactional(readOnly = true)
+    public PostInteractionResponse getPostInteractions(UUID postId) {
+        UUID currentUserId = currentUser().getUserId();
+        Post post = getVisiblePost(postId, currentUserId);
+        PostInteractionScope scope = resolveInteractionScope(post, currentUserId);
+
+        List<PostLike> allLikes = postLikeRepository.findByPostIdOrderByCreatedAtDesc(postId);
+        List<PostComment> allComments = postCommentRepository.findByPostIdAndDeletedAtIsNullOrderByCreatedAtDesc(postId);
+
+        Set<UUID> visibleUserIds = resolveVisibleUserIds(post, currentUserId, scope);
+
+        List<PostLikeResponse> visibleLikes = allLikes.stream()
+                .filter(like -> canSeeActor(like.getUserId(), scope, visibleUserIds))
+                .map(this::toPostLikeResponse)
+                .toList();
+
+        List<PostCommentResponse> visibleComments = allComments.stream()
+                .filter(comment -> canSeeActor(comment.getUserId(), scope, visibleUserIds))
+                .map(comment -> toPostCommentResponse(comment, currentUserId, List.of()))
+                .toList();
+
+        return PostInteractionResponse.builder()
+                .scope(scope)
+                .totalLikeCount(allLikes.size())
+                .totalCommentCount(allComments.size())
+                .visibleLikeCount(visibleLikes.size())
+                .visibleCommentCount(visibleComments.size())
+                .likes(visibleLikes)
+                .comments(visibleComments)
+                .build();
+    }
+
+    @Transactional
+    public MomentResponse createMoment(CreateMomentRequest request) {
+        UserProfile currentUser = currentUser();
+
+        Moment moment = new Moment();
+        moment.setUserId(currentUser.getUserId());
+        moment.setMediaUrl(request.getMediaUrl().trim());
+        moment.setMediaType(request.getMediaType());
+        moment.setCaption(trimToNull(request.getCaption()));
+
+        return toMomentResponse(momentRepository.save(moment));
+    }
+
+    @Transactional(readOnly = true)
+    public List<MomentResponse> getMyMoments(Integer size) {
+        UUID currentUserId = currentUser().getUserId();
+        return momentRepository.findByUserIdAndDeletedAtIsNullOrderByCreatedAtDesc(currentUserId).stream()
+                .limit(normalizeSize(size))
+                .map(this::toMomentResponse)
+                .toList();
+    }
+
+    @Transactional
+    public void deleteMoment(UUID momentId) {
+        Moment moment = getOwnedMoment(momentId);
+        momentRepository.delete(moment);
+    }
+
+    @Transactional(readOnly = true)
+    public List<MomentResponse> getRandomVideoFeed(Integer size) {
+        UUID currentUserId = currentUser().getUserId();
+        int limit = normalizeSize(size);
+        List<UUID> friendIds = getFriendIds(currentUserId);
+
+        List<Moment> selected = new ArrayList<>();
+        Set<UUID> selectedIds = new HashSet<>();
+
+        if (!friendIds.isEmpty()) {
+            List<Moment> friendVideos = new ArrayList<>(momentRepository.findByUserIdsAndMediaType(
+                    friendIds,
+                    MediaType.VIDEO,
+                    PageRequest.of(0, Math.min(limit * VIDEO_CANDIDATE_MULTIPLIER, MAX_PAGE_SIZE))
+            ));
+            Collections.shuffle(friendVideos);
+            for (Moment moment : friendVideos) {
+                if (selected.size() >= limit) {
+                    break;
+                }
+                if (selectedIds.add(moment.getId())) {
+                    selected.add(moment);
+                }
+            }
+        }
+
+        if (selected.size() < limit) {
+            int remaining = limit - selected.size();
+            List<Moment> fallbackVideos = selectedIds.isEmpty()
+                    ? new ArrayList<>(momentRepository.findByMediaType(MediaType.VIDEO, PageRequest.of(0, MAX_PAGE_SIZE)))
+                    : new ArrayList<>(momentRepository.findByMediaTypeExcludingIds(
+                            MediaType.VIDEO,
+                            selectedIds,
+                            PageRequest.of(0, MAX_PAGE_SIZE)
+                    ));
+            Collections.shuffle(fallbackVideos);
+            for (Moment moment : fallbackVideos) {
+                if (remaining == 0) {
+                    break;
+                }
+                if (selectedIds.add(moment.getId())) {
+                    selected.add(moment);
+                    remaining--;
+                }
+            }
+        }
+
+        return selected.stream()
+                .map(this::toMomentResponse)
+                .toList();
+    }
+
+    @Transactional
+    public SocialMediaUploadResponse uploadMedia(MultipartFile file) {
+        UUID currentUserId = currentUser().getUserId();
+        UploadAttachmentResponse upload = s3MediaStorageService.upload(currentUserId, file);
+
+        MediaType mediaType = toMediaType(upload.getType());
+        return SocialMediaUploadResponse.builder()
+                .url(upload.getUrl())
+                .storageKey(upload.getStorageKey())
+                .fileName(upload.getFileName())
+                .contentType(upload.getContentType())
+                .fileSize(upload.getFileSize())
+                .mediaType(mediaType)
+                .build();
+    }
+
+    private Post getOwnedPost(UUID postId) {
+        UUID currentUserId = currentUser().getUserId();
+        Post post = getVisiblePost(postId, currentUserId);
+
+        if (!post.getUserId().equals(currentUserId)) {
+            throw new BusinessException("You do not have permission to modify this post");
+        }
+        return post;
+    }
+
+    private Moment getOwnedMoment(UUID momentId) {
+        UUID currentUserId = currentUser().getUserId();
+        Moment moment = momentRepository.findById(momentId)
+                .filter(item -> item.getDeletedAt() == null)
+                .orElseThrow(() -> new NotFoundException("Moment not found"));
+
+        if (!moment.getUserId().equals(currentUserId)) {
+            throw new BusinessException("You do not have permission to modify this moment");
+        }
+        return moment;
+    }
+
+    private Post getInteractablePost(UUID postId, UUID currentUserId) {
+        Post post = getVisiblePost(postId, currentUserId);
+        if (!post.getUserId().equals(currentUserId) && !areFriends(currentUserId, post.getUserId())) {
+            throw new BusinessException("You cannot interact with this post");
+        }
+        return post;
+    }
+
+    private Post getVisiblePost(UUID postId, UUID currentUserId) {
+        Post post = postRepository.findById(postId)
+                .filter(item -> item.getDeletedAt() == null)
+                .filter(item -> item.getArchivedAt() == null || item.getUserId().equals(currentUserId))
+                .orElseThrow(() -> new NotFoundException("Post not found"));
+        if (!canViewPost(post, currentUserId) && !post.getUserId().equals(currentUserId)) {
+            throw new NotFoundException("Post not found");
+        }
+        return post;
+    }
+
+    private PostComment getVisibleComment(UUID commentId, UUID currentUserId) {
+        PostComment comment = postCommentRepository.findById(commentId)
+                .filter(item -> item.getDeletedAt() == null)
+                .orElseThrow(() -> new NotFoundException("Comment not found"));
+        Post post = getVisiblePost(comment.getPostId(), currentUserId);
+        PostInteractionScope scope = resolveInteractionScope(post, currentUserId);
+        Set<UUID> visibleUserIds = resolveVisibleUserIds(post, currentUserId, scope);
+        if (!canSeeActor(comment.getUserId(), scope, visibleUserIds) && !comment.getUserId().equals(currentUserId)) {
+            throw new NotFoundException("Comment not found");
+        }
+        return comment;
+    }
+
+    private PostResponse toPostResponse(Post post, UUID currentUserId) {
+        UserProfile author = userService.getUser(post.getUserId());
+        PostInteractionScope interactionScope = resolveInteractionScope(post, currentUserId);
+        List<PostMediaResponse> mediaItems = getPostMedia(post.getId());
+        String previewUrl = !mediaItems.isEmpty() ? mediaItems.getFirst().getMediaUrl() : post.getImageUrl();
+
+        return PostResponse.builder()
+                .id(post.getId())
+                .author(toUserSummary(author))
+                .imageUrl(previewUrl)
+                .mediaItems(mediaItems)
+                .caption(post.getCaption())
+                .archived(post.getArchivedAt() != null)
+                .archivedAt(post.getArchivedAt())
+                .visibilityMode(post.getVisibilityMode())
+                .taggedFriends(getTaggedUsers(post.getId()))
+                .likeCount(postLikeRepository.countByPostId(post.getId()))
+                .commentCount(postCommentRepository.countByPostIdAndDeletedAtIsNull(post.getId()))
+                .likedByCurrentUser(postLikeRepository.existsByPostIdAndUserId(post.getId(), currentUserId))
+                .interactionScope(interactionScope)
+                .createdAt(post.getCreatedAt())
+                .updatedAt(post.getUpdatedAt())
+                .build();
+    }
+
+    private List<PostMediaResponse> getPostMedia(UUID postId) {
+        List<PostMedia> medias = postMediaRepository.findByPostIdOrderBySortOrderAscCreatedAtAsc(postId);
+        if (medias.isEmpty()) {
+            return List.of();
+        }
+        return medias.stream()
+                .map(this::toPostMediaResponse)
+                .toList();
+    }
+
+    private PostMediaResponse toPostMediaResponse(PostMedia postMedia) {
+        return PostMediaResponse.builder()
+                .id(postMedia.getId())
+                .mediaUrl(postMedia.getMediaUrl())
+                .mediaType(postMedia.getMediaType())
+                .sortOrder(postMedia.getSortOrder())
+                .build();
+    }
+
+    private PostLikeResponse toPostLikeResponse(PostLike postLike) {
+        UserProfile user = userService.getUser(postLike.getUserId());
+        return PostLikeResponse.builder()
+                .id(postLike.getId())
+                .user(toUserSummary(user))
+                .createdAt(postLike.getCreatedAt())
+                .build();
+    }
+
+    private PostCommentResponse toPostCommentResponse(
+            PostComment postComment,
+            UUID currentUserId,
+            List<PostCommentResponse> replies) {
+        UserProfile user = userService.getUser(postComment.getUserId());
+        return PostCommentResponse.builder()
+                .id(postComment.getId())
+                .parentCommentId(postComment.getParentCommentId())
+                .user(toUserSummary(user))
+                .content(postComment.getContent())
+                .likeCount(postCommentLikeRepository.countByCommentId(postComment.getId()))
+                .likedByCurrentUser(postCommentLikeRepository.existsByCommentIdAndUserId(postComment.getId(), currentUserId))
+                .createdAt(postComment.getCreatedAt())
+                .updatedAt(postComment.getUpdatedAt())
+                .replies(replies)
+                .build();
+    }
+
+    private MomentResponse toMomentResponse(Moment moment) {
+        UserProfile author = userService.getUser(moment.getUserId());
+        return MomentResponse.builder()
+                .id(moment.getId())
+                .author(toUserSummary(author))
+                .mediaUrl(moment.getMediaUrl())
+                .mediaType(moment.getMediaType())
+                .caption(moment.getCaption())
+                .createdAt(moment.getCreatedAt())
+                .build();
+    }
+
+    private UserSummaryResponse toUserSummary(UserProfile userProfile) {
+        return UserSummaryResponse.builder()
+                .userId(userProfile.getUserId())
+                .username(userProfile.getUsername())
+                .displayName(userProfile.getDisplayName())
+                .avatarUrl(userProfile.getAvatarUrl())
+                .build();
+    }
+
+    private List<UUID> getFriendIds(UUID currentUserId) {
+        return friendshipRepository.findByUserIdAndDeletedAtIsNull(currentUserId).stream()
+                .map(Friendship::getFriendId)
+                .filter(friendId -> !isBlockedEitherWay(currentUserId, friendId))
+                .toList();
+    }
+
+    private void syncPostAudience(Post post, UUID currentUserId, List<UUID> allowedViewerIds, List<UUID> taggedFriendIds) {
+        validateVisibilityRequest(post.getVisibilityMode(), allowedViewerIds);
+
+        Set<UUID> friendIds = new HashSet<>(getFriendIds(currentUserId));
+        Set<UUID> allowedSet = sanitizeFriendSelection(allowedViewerIds, friendIds, "allowed viewers");
+        Set<UUID> taggedSet = sanitizeFriendSelection(taggedFriendIds, friendIds, "tagged friends");
+        allowedSet = new HashSet<>(allowedSet);
+        allowedSet.addAll(taggedSet);
+
+        if (post.getVisibilityMode() == PostVisibilityMode.SELECTED_FRIENDS && allowedSet.isEmpty()) {
+            throw new BusinessException("Selected-friends visibility requires at least one friend");
+        }
+
+        postVisibilityGrantRepository.deleteByPostId(post.getId());
+        postTagRepository.deleteByPostId(post.getId());
+
+        allowedSet.forEach(viewerId -> {
+            PostVisibilityGrant grant = new PostVisibilityGrant();
+            grant.setPostId(post.getId());
+            grant.setViewerUserId(viewerId);
+            postVisibilityGrantRepository.save(grant);
+        });
+
+        taggedSet.forEach(taggedUserId -> {
+            PostTag tag = new PostTag();
+            tag.setPostId(post.getId());
+            tag.setTaggedUserId(taggedUserId);
+            postTagRepository.save(tag);
+        });
+    }
+
+    private void validateVisibilityRequest(PostVisibilityMode visibilityMode, List<UUID> allowedViewerIds) {
+        if (visibilityMode == null) {
+            throw new BusinessException("Visibility mode is required");
+        }
+        if (visibilityMode == PostVisibilityMode.ALL_FRIENDS && allowedViewerIds != null && !allowedViewerIds.isEmpty()) {
+            throw new BusinessException("Allowed viewers are only supported for selected-friends visibility");
+        }
+    }
+
+    private Set<UUID> sanitizeFriendSelection(List<UUID> userIds, Set<UUID> friendIds, String fieldName) {
+        if (userIds == null || userIds.isEmpty()) {
+            return Set.of();
+        }
+        Set<UUID> sanitized = new HashSet<>(userIds);
+        if (!friendIds.containsAll(sanitized)) {
+            throw new BusinessException("All " + fieldName + " must be current friends");
+        }
+        return sanitized;
+    }
+
+    private List<UserSummaryResponse> getTaggedUsers(UUID postId) {
+        return postTagRepository.findByPostId(postId).stream()
+                .map(PostTag::getTaggedUserId)
+                .map(userService::getUser)
+                .map(this::toUserSummary)
+                .toList();
+    }
+
+    private List<UserSummaryResponse> getAllowedViewers(UUID postId) {
+        return postVisibilityGrantRepository.findByPostId(postId).stream()
+                .map(PostVisibilityGrant::getViewerUserId)
+                .map(userService::getUser)
+                .map(this::toUserSummary)
+                .toList();
+    }
+
+    @Transactional(readOnly = true)
+    public PostAudienceResponse getPostAudience(UUID postId) {
+        Post post = getOwnedPost(postId);
+        return PostAudienceResponse.builder()
+                .visibilityMode(post.getVisibilityMode())
+                .taggedFriends(getTaggedUsers(post.getId()))
+                .allowedViewers(getAllowedViewers(post.getId()))
+                .build();
+    }
+
+    private boolean areFriends(UUID currentUserId, UUID otherUserId) {
+        if (isBlockedEitherWay(currentUserId, otherUserId)) {
+            return false;
+        }
+        return friendshipRepository.existsByUserIdAndFriendIdAndDeletedAtIsNull(currentUserId, otherUserId)
+                || friendshipRepository.existsByUserIdAndFriendIdAndDeletedAtIsNull(otherUserId, currentUserId);
+    }
+
+    private PostInteractionScope resolveInteractionScope(Post post, UUID currentUserId) {
+        if (!canViewPost(post, currentUserId)) {
+            return PostInteractionScope.NONE;
+        }
+        if (post.getUserId().equals(currentUserId)) {
+            return PostInteractionScope.ALL;
+        }
+        if (areFriends(currentUserId, post.getUserId())) {
+            return PostInteractionScope.FRIENDS_ONLY;
+        }
+        return PostInteractionScope.NONE;
+    }
+
+    private Set<UUID> resolveVisibleUserIds(Post post, UUID currentUserId, PostInteractionScope scope) {
+        if (scope == PostInteractionScope.ALL) {
+            return Set.of();
+        }
+        if (scope == PostInteractionScope.NONE) {
+            return Set.of();
+        }
+
+        Set<UUID> visibleIds = new HashSet<>(getFriendIds(currentUserId));
+        visibleIds.add(currentUserId);
+        visibleIds.add(post.getUserId());
+        return visibleIds;
+    }
+
+    private boolean canSeeActor(UUID actorUserId, PostInteractionScope scope, Set<UUID> visibleUserIds) {
+        if (scope == PostInteractionScope.ALL) {
+            return true;
+        }
+        if (scope == PostInteractionScope.NONE) {
+            return false;
+        }
+        return visibleUserIds.contains(actorUserId);
+    }
+
+    private List<PostCommentResponse> buildCommentTree(
+            List<PostComment> comments,
+            UUID parentCommentId,
+            UUID currentUserId) {
+        return comments.stream()
+                .filter(comment -> {
+                    if (parentCommentId == null) {
+                        return comment.getParentCommentId() == null;
+                    }
+                    return parentCommentId.equals(comment.getParentCommentId());
+                })
+                .map(comment -> toPostCommentResponse(
+                        comment,
+                        currentUserId,
+                        buildCommentTree(comments, comment.getId(), currentUserId)
+                ))
+                .toList();
+    }
+
+    private UserProfile currentUser() {
+        return userService.getMyProfile();
+    }
+
+    private boolean canViewPost(Post post, UUID viewerUserId) {
+        if (post.getUserId().equals(viewerUserId)) {
+            return true;
+        }
+        if (isBlockedEitherWay(post.getUserId(), viewerUserId)) {
+            return false;
+        }
+        if (!areFriends(viewerUserId, post.getUserId())) {
+            return false;
+        }
+        if (post.getVisibilityMode() == PostVisibilityMode.ALL_FRIENDS) {
+            return true;
+        }
+        return postVisibilityGrantRepository.existsByPostIdAndViewerUserId(post.getId(), viewerUserId);
+    }
+
+    private List<CreatePostMediaItemRequest> validatePostMediaItems(List<CreatePostMediaItemRequest> mediaItems) {
+        if (mediaItems == null || mediaItems.isEmpty()) {
+            throw new BusinessException("Post must contain at least one image or video");
+        }
+        if (mediaItems.size() > 10) {
+            throw new BusinessException("Post can contain at most 10 media items");
+        }
+        for (CreatePostMediaItemRequest mediaItem : mediaItems) {
+            if (mediaItem == null || mediaItem.getMediaUrl() == null || mediaItem.getMediaUrl().isBlank()) {
+                throw new BusinessException("Each media item must include a URL");
+            }
+            if (mediaItem.getMediaType() == null) {
+                throw new BusinessException("Each media item must include a media type");
+            }
+        }
+        return mediaItems;
+    }
+
+    private List<CreatePostMediaItemRequest> resolveRequestMediaItems(CreatePostRequest request) {
+        if (request.getMediaItems() != null && !request.getMediaItems().isEmpty()) {
+            return request.getMediaItems();
+        }
+        if (request.getImageUrl() != null && !request.getImageUrl().isBlank()) {
+            CreatePostMediaItemRequest fallback = new CreatePostMediaItemRequest();
+            fallback.setMediaUrl(request.getImageUrl().trim());
+            fallback.setMediaType(MediaType.IMAGE);
+            return List.of(fallback);
+        }
+        return List.of();
+    }
+
+    private void savePostMedia(UUID postId, List<CreatePostMediaItemRequest> mediaItems) {
+        postMediaRepository.deleteByPostId(postId);
+        for (int index = 0; index < mediaItems.size(); index++) {
+            CreatePostMediaItemRequest item = mediaItems.get(index);
+            PostMedia postMedia = new PostMedia();
+            postMedia.setPostId(postId);
+            postMedia.setMediaUrl(item.getMediaUrl().trim());
+            postMedia.setMediaType(item.getMediaType());
+            postMedia.setSortOrder(index);
+            postMediaRepository.save(postMedia);
+        }
+    }
+
+    private boolean isBlockedEitherWay(UUID userA, UUID userB) {
+        return userBlockRepository.existsByBlockerIdAndBlockedIdAndDeletedAtIsNull(userA, userB)
+                || userBlockRepository.existsByBlockerIdAndBlockedIdAndDeletedAtIsNull(userB, userA);
+    }
+
+    private int normalizeSize(Integer size) {
+        if (size == null || size <= 0) {
+            return DEFAULT_PAGE_SIZE;
+        }
+        return Math.min(size, MAX_PAGE_SIZE);
+    }
+
+    private int normalizeFeedCandidateSize(Integer size) {
+        return Math.min(normalizeSize(size) * 3, MAX_PAGE_SIZE);
+    }
+
+    private String trimToNull(String value) {
+        if (value == null) {
+            return null;
+        }
+        String trimmed = value.trim();
+        return trimmed.isEmpty() ? null : trimmed;
+    }
+
+    private MediaType toMediaType(MessageType messageType) {
+        if (messageType == MessageType.IMAGE) {
+            return MediaType.IMAGE;
+        }
+        if (messageType == MessageType.VIDEO) {
+            return MediaType.VIDEO;
+        }
+        throw new BusinessException("Only image and video files are supported");
+    }
+}

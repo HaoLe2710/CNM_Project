@@ -6,7 +6,6 @@ import lombok.Getter;
 import lombok.Setter;
 import org.hibernate.annotations.SQLDelete;
 
-import java.time.Instant;
 import java.util.UUID;
 
 @Entity
@@ -23,6 +22,9 @@ public class PostComment extends BaseEntity {
     private UUID postId;
     @Column(name = "user_id", nullable = false)
     private UUID userId;
+
+    @Column(name = "parent_comment_id")
+    private UUID parentCommentId;
 
     @Column(columnDefinition = "text", nullable = false )
     private String content;

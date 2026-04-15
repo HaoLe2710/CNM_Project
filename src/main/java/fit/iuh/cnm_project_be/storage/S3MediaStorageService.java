@@ -40,13 +40,17 @@ public class S3MediaStorageService {
             throw new BusinessException("S3 region is not configured");
         }
 
+        validateFileSize(file);
+
+        String resolvedContentType = resolveContentType(file);
+        MessageType resolvedMessageType = resolveMessageType(resolvedContentType, file.getOriginalFilename());
         String storageKey = buildStorageKey(userId, file.getOriginalFilename());
 
         try (S3Client s3Client = buildClient()) {
             PutObjectRequest request = PutObjectRequest.builder()
                     .bucket(resolveBucket())
                     .key(storageKey)
-                    .contentType(file.getContentType())
+                    .contentType(resolvedContentType)
                     .build();
 
             s3Client.putObject(request, RequestBody.fromBytes(file.getBytes()));
@@ -60,9 +64,9 @@ public class S3MediaStorageService {
                 .url(resolvePublicUrl(storageKey))
                 .storageKey(storageKey)
                 .fileName(file.getOriginalFilename())
-                .contentType(file.getContentType())
+                .contentType(resolvedContentType)
                 .fileSize(file.getSize())
-                .type(resolveMessageType(file.getContentType()))
+                .type(resolvedMessageType)
                 .build();
     }
 
@@ -105,9 +109,9 @@ public class S3MediaStorageService {
         return "https://" + resolveBucket() + ".s3." + resolveRegion() + ".amazonaws.com/" + storageKey;
     }
 
-    private MessageType resolveMessageType(String contentType) {
+    private MessageType resolveMessageType(String contentType, String fileName) {
         if (contentType == null || contentType.isBlank()) {
-            return MessageType.FILE;
+            return resolveMessageTypeByExtension(fileName);
         }
         if (contentType.startsWith("image/")) {
             return MessageType.IMAGE;
@@ -117,6 +121,80 @@ public class S3MediaStorageService {
         }
         if (contentType.startsWith("audio/")) {
             return MessageType.AUDIO;
+        }
+        return resolveMessageTypeByExtension(fileName);
+    }
+
+    private void validateFileSize(MultipartFile file) {
+        MessageType messageType = resolveMessageType(resolveContentType(file), file.getOriginalFilename());
+        long fileSize = file.getSize();
+        long maxSize = switch (messageType) {
+            case IMAGE -> properties.getMaxImageSizeBytes();
+            case VIDEO -> properties.getMaxVideoSizeBytes();
+            default -> properties.getMaxFileSizeBytes();
+        };
+
+        if (fileSize > maxSize) {
+            throw new BusinessException("File exceeds the allowed size of " + toMegabytes(maxSize) + "MB");
+        }
+    }
+
+    private long toMegabytes(long bytes) {
+        return bytes / (1024 * 1024);
+    }
+
+    private String resolveContentType(MultipartFile file) {
+        String contentType = file.getContentType();
+        if (contentType != null && !contentType.isBlank() && !"application/octet-stream".equalsIgnoreCase(contentType)) {
+            return contentType;
+        }
+        String fileName = file.getOriginalFilename();
+        if (fileName == null) {
+            return contentType;
+        }
+        String normalized = fileName.toLowerCase();
+        if (normalized.endsWith(".heic")) {
+            return "image/heic";
+        }
+        if (normalized.endsWith(".heif")) {
+            return "image/heif";
+        }
+        if (normalized.endsWith(".jpg") || normalized.endsWith(".jpeg")) {
+            return "image/jpeg";
+        }
+        if (normalized.endsWith(".png")) {
+            return "image/png";
+        }
+        if (normalized.endsWith(".webp")) {
+            return "image/webp";
+        }
+        if (normalized.endsWith(".mp4")) {
+            return "video/mp4";
+        }
+        if (normalized.endsWith(".mov")) {
+            return "video/quicktime";
+        }
+        return contentType;
+    }
+
+    private MessageType resolveMessageTypeByExtension(String fileName) {
+        if (fileName == null || fileName.isBlank()) {
+            return MessageType.FILE;
+        }
+        String normalized = fileName.toLowerCase();
+        if (normalized.endsWith(".jpg")
+                || normalized.endsWith(".jpeg")
+                || normalized.endsWith(".png")
+                || normalized.endsWith(".webp")
+                || normalized.endsWith(".heic")
+                || normalized.endsWith(".heif")) {
+            return MessageType.IMAGE;
+        }
+        if (normalized.endsWith(".mp4")
+                || normalized.endsWith(".mov")
+                || normalized.endsWith(".webm")
+                || normalized.endsWith(".m4v")) {
+            return MessageType.VIDEO;
         }
         return MessageType.FILE;
     }

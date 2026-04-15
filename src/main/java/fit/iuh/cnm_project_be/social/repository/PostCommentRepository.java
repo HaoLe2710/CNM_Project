@@ -9,5 +9,9 @@ import java.util.UUID;
 public interface PostCommentRepository
         extends SoftDeleteRepository<PostComment, UUID> {
 
-    List<PostComment> findByPostIdAndDeletedAtIsNull(UUID postId);
+    List<PostComment> findByPostIdAndDeletedAtIsNullOrderByCreatedAtDesc(UUID postId);
+
+    List<PostComment> findByPostIdAndParentCommentIdAndDeletedAtIsNullOrderByCreatedAtAsc(UUID postId, UUID parentCommentId);
+
+    long countByPostIdAndDeletedAtIsNull(UUID postId);
 }
