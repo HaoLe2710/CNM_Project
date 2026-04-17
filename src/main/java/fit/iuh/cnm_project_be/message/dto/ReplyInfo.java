@@ -12,6 +12,8 @@ public class ReplyInfo {
 
     private Long messageId;
     private UUID senderId;
+    private String senderDisplayName;
+    private String senderAvatarUrl;
     private String contentPreview;
     private MessageType type;
 }

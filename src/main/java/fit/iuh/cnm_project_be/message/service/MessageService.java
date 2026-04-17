@@ -32,12 +32,14 @@ import fit.iuh.cnm_project_be.message.repository.MessageStatusRepository;
 import fit.iuh.cnm_project_be.message.repository.MessageUserStateRepository;
 import fit.iuh.cnm_project_be.realtime.dto.RealtimeEvent;
 import fit.iuh.cnm_project_be.realtime.dto.RealtimeEventType;
+import fit.iuh.cnm_project_be.room.dto.ConversationMemberResponse;
 import fit.iuh.cnm_project_be.room.dto.ConversationResponse;
 import fit.iuh.cnm_project_be.room.dto.ConversationStatusPayload;
 import fit.iuh.cnm_project_be.room.entity.Conversation;
 import fit.iuh.cnm_project_be.room.entity.ConversationMember;
 import fit.iuh.cnm_project_be.room.entity.ConversationUserSetting;
 import fit.iuh.cnm_project_be.room.enums.ConversationNotificationLevel;
+import fit.iuh.cnm_project_be.room.enums.ConversationType;
 import fit.iuh.cnm_project_be.room.repository.ConversationMemberRepository;
 import fit.iuh.cnm_project_be.room.repository.ConversationRepository;
 import fit.iuh.cnm_project_be.room.repository.ConversationUserSettingRepository;
@@ -45,6 +47,7 @@ import fit.iuh.cnm_project_be.storage.S3MediaStorageService;
 import fit.iuh.cnm_project_be.user.entity.UserProfile;
 import fit.iuh.cnm_project_be.user.repository.UserProfileRepository;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
@@ -74,6 +77,7 @@ import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 @Service
+@Slf4j
 @RequiredArgsConstructor
 public class MessageService {
 
@@ -341,8 +345,12 @@ public class MessageService {
     }
 
     private String resolveUserDisplayName(UserProfile userProfile) {
+        return resolveUserDisplayName(userProfile, null);
+    }
+
+    private String resolveUserDisplayName(UserProfile userProfile, UUID fallbackUserId) {
         if (userProfile == null) {
-            return null;
+            return fallbackUserId != null ? fallbackUserId.toString() : null;
         }
 
         String displayName = userProfile.getDisplayName();
@@ -360,7 +368,8 @@ public class MessageService {
             return username;
         }
 
-        return userProfile.getUserId() != null ? userProfile.getUserId().toString() : null;
+        UUID userId = userProfile.getUserId() != null ? userProfile.getUserId() : fallbackUserId;
+        return userId != null ? userId.toString() : null;
     }
 
     private String resolveFullName(UserProfile userProfile) {
@@ -391,13 +400,31 @@ public class MessageService {
         Map<Long, MessageUserState> statesByMessageId = messageUserStateRepository.findByMessageIdInAndUserId(messageIds, currentUserId).stream()
                 .collect(Collectors.toMap(MessageUserState::getMessageId, state -> state));
 
+        Map<Long, Message> replyMessagesByReplyToId = loadReplyMessagesByReplyToId(messages);
+        Set<UUID> relatedUserIds = new HashSet<>();
+        messages.stream()
+                .map(Message::getSenderId)
+                .filter(java.util.Objects::nonNull)
+                .forEach(relatedUserIds::add);
+        messages.stream()
+                .map(Message::getReplyToSenderId)
+                .filter(java.util.Objects::nonNull)
+                .forEach(relatedUserIds::add);
+        replyMessagesByReplyToId.values().stream()
+                .map(Message::getSenderId)
+                .filter(java.util.Objects::nonNull)
+                .forEach(relatedUserIds::add);
+        Map<UUID, UserProfile> profilesByUserId = loadUserProfilesByUserId(relatedUserIds);
+
         return messages.stream()
                 .map(message -> mapToResponse(
                         message,
                         currentUserId,
                         attachmentsByMessageId.getOrDefault(message.getId(), List.of()),
                         reactionsByMessageId.getOrDefault(message.getId(), List.of()),
-                        statesByMessageId.get(message.getId())
+                        statesByMessageId.get(message.getId()),
+                        profilesByUserId,
+                        replyMessagesByReplyToId
                 ))
                 .toList();
     }
@@ -407,7 +434,7 @@ public class MessageService {
             UUID currentUserId,
             List<MessageAttachment> attachments,
             List<MessageReaction> reactions) {
-        return mapToResponse(message, currentUserId, attachments, reactions, null);
+        return mapToResponse(message, currentUserId, attachments, reactions, null, null, null);
     }
 
     private MessageResponse mapToResponse(
@@ -416,18 +443,40 @@ public class MessageService {
             List<MessageAttachment> attachments,
             List<MessageReaction> reactions,
             MessageUserState state) {
+        return mapToResponse(message, currentUserId, attachments, reactions, state, null, null);
+    }
+
+    private MessageResponse mapToResponse(
+            Message message,
+            UUID currentUserId,
+            List<MessageAttachment> attachments,
+            List<MessageReaction> reactions,
+            MessageUserState state,
+            Map<UUID, UserProfile> profilesByUserId,
+            Map<Long, Message> replyMessagesByReplyToId) {
 
         List<MessageAttachmentResponse> attachmentResponses = attachments.stream()
                 .map(this::mapAttachment)
                 .toList();
+        UserProfile senderProfile = resolveUserProfile(message.getSenderId(), profilesByUserId);
+        String senderDisplayName = resolveUserDisplayName(senderProfile, message.getSenderId());
+        String senderAvatarUrl = resolveUserAvatarUrl(senderProfile);
+
+        log.debug("[BE MESSAGE SENDER MAP] messageId={} senderId={} displayName={} avatarUrl={}",
+                message.getId(),
+                message.getSenderId(),
+                senderDisplayName,
+                senderAvatarUrl);
 
         return MessageResponse.builder()
                 .id(message.getId())
                 .conversationId(message.getConversationId())
                 .senderId(message.getSenderId())
+                .senderDisplayName(senderDisplayName)
+                .senderAvatarUrl(senderAvatarUrl)
                 .content(message.getContent())
                 .type(message.getMessageType())
-                .replyTo(buildReplyInfo(message))
+                .replyTo(buildReplyInfo(message, profilesByUserId, replyMessagesByReplyToId))
                 .attachments(attachmentResponses)
                 .reactions(summarizeReactions(reactions))
                 .myReaction(findMyReaction(reactions, currentUserId))
@@ -449,17 +498,51 @@ public class MessageService {
                 .build();
     }
 
-    private ReplyInfo buildReplyInfo(Message message) {
+    private ReplyInfo buildReplyInfo(
+            Message message,
+            Map<UUID, UserProfile> profilesByUserId,
+            Map<Long, Message> replyMessagesByReplyToId) {
         if (message.getReplyToMessageId() == null) {
             return null;
         }
 
+        Message repliedMessage = resolveReplyMessage(message.getReplyToMessageId(), replyMessagesByReplyToId);
+        UUID replySenderId = repliedMessage != null && repliedMessage.getSenderId() != null
+                ? repliedMessage.getSenderId()
+                : message.getReplyToSenderId();
+        UserProfile replySenderProfile = resolveUserProfile(replySenderId, profilesByUserId);
+        String replySenderDisplayName = resolveUserDisplayName(replySenderProfile, replySenderId);
+        String replySenderAvatarUrl = resolveUserAvatarUrl(replySenderProfile);
+
+        log.debug("[BE REPLY SENDER MAP] messageId={} replyMessageId={} senderId={} displayName={} avatarUrl={}",
+                message.getId(),
+                message.getReplyToMessageId(),
+                replySenderId,
+                replySenderDisplayName,
+                replySenderAvatarUrl);
+
         return ReplyInfo.builder()
                 .messageId(message.getReplyToMessageId())
-                .senderId(message.getReplyToSenderId())
+                .senderId(replySenderId)
+                .senderDisplayName(replySenderDisplayName)
+                .senderAvatarUrl(replySenderAvatarUrl)
                 .contentPreview(message.getReplyToContentPreview())
-                .type(message.getReplyToType())
+                .type(repliedMessage != null && repliedMessage.getMessageType() != null
+                        ? repliedMessage.getMessageType()
+                        : message.getReplyToType())
                 .build();
+    }
+
+    private Message resolveReplyMessage(Long replyToMessageId, Map<Long, Message> replyMessagesByReplyToId) {
+        if (replyToMessageId == null) {
+            return null;
+        }
+
+        if (replyMessagesByReplyToId != null && replyMessagesByReplyToId.containsKey(replyToMessageId)) {
+            return replyMessagesByReplyToId.get(replyToMessageId);
+        }
+
+        return messageRepository.findById(replyToMessageId).orElse(null);
     }
 
     private List<MessageReactionSummary> summarizeReactions(List<MessageReaction> reactions) {
@@ -653,6 +736,12 @@ public class MessageService {
             }
 
             ConversationResponse response = buildConversationResponse(conversation, member.getUserId(), setting);
+            log.debug("[BE UNREAD REFRESH] conversationId={} userId={} notificationLevel={} mentioned={} unreadCount={} deliver=true",
+                    conversation.getId(),
+                    member.getUserId(),
+                    resolveNotificationLevel(setting),
+                    mentionedUserIds.contains(member.getUserId()),
+                    response.getUnreadCount());
             messagingTemplate.convertAndSend("/topic/users/" + member.getUserId() + "/conversations",
                     RealtimeEvent.of(RealtimeEventType.CONVERSATION_UPDATED, response));
         });
@@ -666,8 +755,9 @@ public class MessageService {
         );
         Message lastMessage = lastMessages.isEmpty() ? null : lastMessages.get(0);
         String displayName = resolveDisplayName(conversation, setting);
+        List<ConversationMemberResponse> groupMembers = buildGroupMembers(conversation);
 
-        return ConversationResponse.builder()
+        ConversationResponse response = ConversationResponse.builder()
                 .id(conversation.getId())
                 .name(conversation.getName())
                 .avatarUrl(conversation.getAvatarUrl())
@@ -681,7 +771,17 @@ public class MessageService {
                 .notificationLevel(resolveNotificationLevel(setting))
                 .customName(setting != null ? setting.getCustomName() : null)
                 .displayName(displayName)
+                .members(groupMembers)
                 .build();
+
+        if (conversation.getType() == ConversationType.GROUP) {
+            log.debug("[BE GROUP RESPONSE MEMBERS] conversationId={} userId={} source=message-service memberCount={}",
+                    conversation.getId(),
+                    userId,
+                    groupMembers != null ? groupMembers.size() : 0);
+        }
+
+        return response;
     }
 
     private ConversationUserSetting findConversationUserSetting(UUID conversationId, UUID userId) {
@@ -697,11 +797,8 @@ public class MessageService {
 
     private boolean shouldDeliverConversationRefresh(ConversationUserSetting setting) {
         ConversationNotificationLevel notificationLevel = resolveNotificationLevel(setting);
-        if (notificationLevel == ConversationNotificationLevel.NONE) {
-            return false;
-        }
-
-        // Non-message-create refreshes keep MENTIONS_ONLY compatibility behavior for now.
+        log.debug("[BE UNREAD VS NOTIFY POLICY] scope=conversation-refresh notificationLevel={} deliver=true reason=conversation-state-sync",
+                notificationLevel);
         return true;
     }
 
@@ -712,23 +809,17 @@ public class MessageService {
             Set<UUID> mentionedUserIds) {
 
         ConversationNotificationLevel notificationLevel = resolveNotificationLevel(setting);
-        if (notificationLevel == ConversationNotificationLevel.NONE) {
-            return false;
-        }
-        if (notificationLevel == ConversationNotificationLevel.ALL) {
-            return true;
-        }
-        if (conversation.getType() == fit.iuh.cnm_project_be.room.enums.ConversationType.PRIVATE) {
-            // MENTIONS_ONLY stays compatibility-safe for private chats.
-            return true;
-        }
-
-        // MENTIONS_ONLY is mention-aware only for message-originated group refreshes.
-        return mentionedUserIds.contains(userId);
+        boolean mentioned = mentionedUserIds.contains(userId);
+        log.debug("[BE UNREAD VS NOTIFY POLICY] scope=new-message-refresh conversationId={} userId={} notificationLevel={} mentioned={} deliver=true reason=unread-sync",
+                conversation.getId(),
+                userId,
+                notificationLevel,
+                mentioned);
+        return true;
     }
 
     private Set<UUID> resolveMentionedUserIds(Conversation conversation, List<ConversationMember> members, String content) {
-        if (conversation.getType() != fit.iuh.cnm_project_be.room.enums.ConversationType.GROUP) {
+        if (conversation.getType() != ConversationType.GROUP) {
             return Set.of();
         }
 
@@ -767,6 +858,36 @@ public class MessageService {
             return setting.getCustomName();
         }
         return conversation.getName();
+    }
+
+    private List<ConversationMemberResponse> buildGroupMembers(Conversation conversation) {
+        if (conversation.getType() != ConversationType.GROUP) {
+            return null;
+        }
+
+        List<ConversationMember> members = conversationMemberRepository.findByConversationId(conversation.getId());
+        Map<UUID, UserProfile> profilesByUserId = loadUserProfilesByUserId(members.stream()
+                .map(ConversationMember::getUserId)
+                .toList());
+        List<ConversationMemberResponse> memberResponses = members.stream()
+                .map(member -> mapConversationMember(member, profilesByUserId.get(member.getUserId())))
+                .toList();
+
+        log.debug("[BE GROUP RESPONSE MEMBERS] conversationId={} source=message-builder memberCount={}",
+                conversation.getId(),
+                memberResponses.size());
+
+        return memberResponses;
+    }
+
+    private ConversationMemberResponse mapConversationMember(ConversationMember member, UserProfile userProfile) {
+        return ConversationMemberResponse.builder()
+                .userId(member.getUserId())
+                .username(userProfile != null ? normalizeNullableText(userProfile.getUsername()) : null)
+                .displayName(resolveUserDisplayName(userProfile, member.getUserId()))
+                .avatarUrl(userProfile != null ? normalizeNullableText(userProfile.getAvatarUrl()) : null)
+                .role(member.getRole())
+                .build();
     }
 
     private void broadcastReactionUpdate(Message message, UUID actorUserId, MessageReactionType actorReaction) {
@@ -835,5 +956,59 @@ public class MessageService {
         private boolean isPresent() {
             return createdAt != null && messageId != null;
         }
+    }
+
+    private Map<UUID, UserProfile> loadUserProfilesByUserId(Collection<UUID> userIds) {
+        if (userIds == null || userIds.isEmpty()) {
+            return Map.of();
+        }
+
+        Map<UUID, UserProfile> profilesByUserId = new LinkedHashMap<>();
+        userProfileRepository.findAllById(userIds).stream()
+                .filter(userProfile -> !userProfile.isDeleted())
+                .forEach(userProfile -> profilesByUserId.put(userProfile.getUserId(), userProfile));
+        return profilesByUserId;
+    }
+
+    private UserProfile resolveUserProfile(UUID userId, Map<UUID, UserProfile> profilesByUserId) {
+        if (userId == null) {
+            return null;
+        }
+
+        if (profilesByUserId != null && profilesByUserId.containsKey(userId)) {
+            return profilesByUserId.get(userId);
+        }
+
+        return userProfileRepository.findById(userId)
+                .filter(userProfile -> !userProfile.isDeleted())
+                .orElse(null);
+    }
+
+    private String resolveUserAvatarUrl(UserProfile userProfile) {
+        return userProfile != null ? normalizeNullableText(userProfile.getAvatarUrl()) : null;
+    }
+
+    private Map<Long, Message> loadReplyMessagesByReplyToId(List<Message> messages) {
+        List<Long> replyToMessageIds = messages.stream()
+                .map(Message::getReplyToMessageId)
+                .filter(java.util.Objects::nonNull)
+                .distinct()
+                .toList();
+
+        if (replyToMessageIds.isEmpty()) {
+            return Map.of();
+        }
+
+        return messageRepository.findAllById(replyToMessageIds).stream()
+                .collect(Collectors.toMap(Message::getId, replyMessage -> replyMessage));
+    }
+
+    private String normalizeNullableText(String value) {
+        if (value == null) {
+            return null;
+        }
+
+        String normalizedValue = value.trim();
+        return normalizedValue.isEmpty() ? null : normalizedValue;
     }
 }

@@ -8,6 +8,7 @@ import fit.iuh.cnm_project_be.message.repository.MessageRepository;
 import fit.iuh.cnm_project_be.message.repository.MessageUserStateRepository;
 import fit.iuh.cnm_project_be.realtime.dto.RealtimeEvent;
 import fit.iuh.cnm_project_be.realtime.dto.RealtimeEventType;
+import fit.iuh.cnm_project_be.room.dto.ConversationMemberResponse;
 import fit.iuh.cnm_project_be.room.dto.ConversationResponse;
 import fit.iuh.cnm_project_be.room.dto.ConversationStatusPayload;
 import fit.iuh.cnm_project_be.room.dto.CreateConversationRequest;
@@ -23,6 +24,7 @@ import fit.iuh.cnm_project_be.room.repository.ConversationUserSettingRepository;
 import fit.iuh.cnm_project_be.user.entity.UserProfile;
 import fit.iuh.cnm_project_be.user.repository.UserProfileRepository;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.stereotype.Service;
@@ -40,6 +42,7 @@ import java.util.Set;
 import java.util.UUID;
 
 @Service
+@Slf4j
 @RequiredArgsConstructor
 public class ConversationService {
 
@@ -103,7 +106,9 @@ public class ConversationService {
         conversation.setName(normalizedName);
         Conversation savedConversation = conversationRepository.save(conversation);
         broadcastConversationUpdates(savedConversation.getId());
-        return mapToResponse(savedConversation, actorUserId);
+        ConversationResponse response = mapToResponse(savedConversation, actorUserId);
+        logGroupLifecycleMembers("rename-group", response);
+        return response;
     }
 
     @Transactional
@@ -122,7 +127,9 @@ public class ConversationService {
         conversation.setAvatarUrl(normalizedAvatarUrl);
         Conversation savedConversation = conversationRepository.save(conversation);
         broadcastConversationUpdates(savedConversation.getId());
-        return mapToResponse(savedConversation, actorUserId);
+        ConversationResponse response = mapToResponse(savedConversation, actorUserId);
+        logGroupLifecycleMembers("update-group-avatar", response);
+        return response;
     }
 
     @Transactional
@@ -147,7 +154,9 @@ public class ConversationService {
         conversationMemberRepository.save(targetMember);
 
         broadcastConversationUpdates(conversationId);
-        return mapToResponse(conversation, actorUserId);
+        ConversationResponse response = mapToResponse(conversation, actorUserId);
+        logGroupLifecycleMembers("transfer-ownership", response);
+        return response;
     }
 
     @Transactional
@@ -166,7 +175,9 @@ public class ConversationService {
         targetMember.setRole(MemberRole.ADMIN);
         conversationMemberRepository.save(targetMember);
         broadcastConversationUpdates(conversationId);
-        return mapToResponse(conversation, actorUserId);
+        ConversationResponse response = mapToResponse(conversation, actorUserId);
+        logGroupLifecycleMembers("promote-admin", response);
+        return response;
     }
 
     @Transactional
@@ -188,7 +199,9 @@ public class ConversationService {
         targetMember.setRole(MemberRole.MEMBER);
         conversationMemberRepository.save(targetMember);
         broadcastConversationUpdates(conversationId);
-        return mapToResponse(conversation, actorUserId);
+        ConversationResponse response = mapToResponse(conversation, actorUserId);
+        logGroupLifecycleMembers("demote-admin", response);
+        return response;
     }
 
     @Transactional
@@ -319,7 +332,9 @@ public class ConversationService {
         conversationMemberRepository.save(member);
 
         broadcastConversationUpdates(conversationId);
-        return mapToResponse(conversation, actorUserId);
+        ConversationResponse response = mapToResponse(conversation, actorUserId);
+        logGroupLifecycleMembers("add-member", response);
+        return response;
     }
 
     @Transactional
@@ -342,7 +357,9 @@ public class ConversationService {
 
         conversationMemberRepository.deleteByConversationIdAndUserId(conversationId, targetUserId);
         broadcastConversationUpdates(conversationId);
-        return mapToResponse(conversation, actorUserId);
+        ConversationResponse response = mapToResponse(conversation, actorUserId);
+        logGroupLifecycleMembers("remove-member", response);
+        return response;
     }
 
     @Transactional
@@ -377,10 +394,11 @@ public class ConversationService {
         List<Message> lastMsgs = messageRepository.findVisibleMessages(conv.getId(), userId, PageRequest.of(0, 1));
         Message lastMsg = lastMsgs.isEmpty() ? null : lastMsgs.get(0);
         long unreadCount = messageUserStateRepository.countUnreadMessages(conv.getId(), userId);
+        List<ConversationMemberResponse> groupMembers = buildGroupMembers(conv);
         PrivatePeerInfo privatePeerInfo = resolvePrivatePeerInfo(conv, userId);
         String displayName = resolveDisplayName(conv, setting, privatePeerInfo);
         String avatarUrl = resolveAvatarUrl(conv, privatePeerInfo);
-        return ConversationResponse.builder()
+        ConversationResponse response = ConversationResponse.builder()
                 .id(conv.getId())
                 .name(conv.getName())
                 .avatarUrl(avatarUrl)
@@ -398,8 +416,21 @@ public class ConversationService {
                 .peerUserId(privatePeerInfo.userId())
                 .peerDisplayName(privatePeerInfo.displayName())
                 .peerAvatarUrl(privatePeerInfo.avatarUrl())
+                .members(groupMembers)
 
                 .build();
+
+        if (conv.getType() == ConversationType.GROUP) {
+            log.debug("[BE GROUP RESPONSE MEMBERS] conversationId={} userId={} memberCount={} members={}",
+                    conv.getId(),
+                    userId,
+                    groupMembers.size(),
+                    groupMembers.stream()
+                            .map(member -> member.getUserId() + ":" + member.getRole())
+                            .toList());
+        }
+
+        return response;
     }
 
     private List<ConversationResponse> mapConversationResponses(List<Conversation> conversations, UUID userId,
@@ -464,6 +495,7 @@ public class ConversationService {
         }
 
         ConversationResponse creatorResponse = mapToResponse(savedConversation, creatorId);
+        logGroupLifecycleMembers("create-group", creatorResponse);
         participantIds.forEach(userId -> messagingTemplate.convertAndSend(
                 "/topic/users/" + userId + "/conversations",
                 RealtimeEvent.of(RealtimeEventType.CONVERSATION_UPDATED, mapToResponse(savedConversation, userId))));
@@ -478,9 +510,9 @@ public class ConversationService {
                 return;
             }
 
+            ConversationResponse response = mapToResponse(conversation, member.getUserId(), setting);
             messagingTemplate.convertAndSend("/topic/users/" + member.getUserId() + "/conversations",
-                    RealtimeEvent.of(RealtimeEventType.CONVERSATION_UPDATED,
-                            mapToResponse(conversation, member.getUserId(), setting)));
+                    RealtimeEvent.of(RealtimeEventType.CONVERSATION_UPDATED, response));
         });
     }
 
@@ -614,14 +646,29 @@ public class ConversationService {
 
     private boolean shouldDeliverConversationRefresh(ConversationUserSetting setting) {
         ConversationNotificationLevel notificationLevel = resolveNotificationLevel(setting);
-        if (notificationLevel == ConversationNotificationLevel.NONE) {
-            return false;
+        log.debug("[BE UNREAD VS NOTIFY POLICY] scope=conversation-refresh notificationLevel={} deliver=true reason=conversation-state-sync",
+                notificationLevel);
+        return true;
+    }
+
+    private List<ConversationMemberResponse> buildGroupMembers(Conversation conversation) {
+        if (conversation.getType() != ConversationType.GROUP) {
+            return null;
         }
 
-        // Mention-aware notification filtering is intentionally deferred.
-        // Until mentions are implemented, MENTIONS_ONLY preserves the current ALL
-        // behavior.
-        return true;
+        List<ConversationMember> members = conversationMemberRepository.findByConversationId(conversation.getId());
+        Map<UUID, UserProfile> profilesByUserId = loadUserProfilesByUserId(members.stream()
+                .map(ConversationMember::getUserId)
+                .toList());
+        List<ConversationMemberResponse> memberResponses = members.stream()
+                .map(member -> mapConversationMember(member, profilesByUserId.get(member.getUserId())))
+                .toList();
+
+        log.debug("[BE GROUP RESPONSE MEMBERS] conversationId={} source=builder memberCount={}",
+                conversation.getId(),
+                memberResponses.size());
+
+        return memberResponses;
     }
 
     private String normalizeCustomName(String customName) {
@@ -682,9 +729,23 @@ public class ConversationService {
                 .orElseGet(PrivatePeerInfo::empty);
     }
 
+    private ConversationMemberResponse mapConversationMember(ConversationMember member, UserProfile userProfile) {
+        return ConversationMemberResponse.builder()
+                .userId(member.getUserId())
+                .username(userProfile != null ? normalizeNullableText(userProfile.getUsername()) : null)
+                .displayName(resolveUserDisplayName(userProfile, member.getUserId()))
+                .avatarUrl(userProfile != null ? normalizeNullableText(userProfile.getAvatarUrl()) : null)
+                .role(member.getRole())
+                .build();
+    }
+
     private String resolveUserDisplayName(UserProfile userProfile) {
+        return resolveUserDisplayName(userProfile, null);
+    }
+
+    private String resolveUserDisplayName(UserProfile userProfile, UUID fallbackUserId) {
         if (userProfile == null) {
-            return null;
+            return fallbackUserId != null ? fallbackUserId.toString() : null;
         }
 
         String displayName = userProfile.getDisplayName();
@@ -702,7 +763,8 @@ public class ConversationService {
             return username;
         }
 
-        return userProfile.getUserId() != null ? userProfile.getUserId().toString() : null;
+        UUID userId = userProfile.getUserId() != null ? userProfile.getUserId() : fallbackUserId;
+        return userId != null ? userId.toString() : null;
     }
 
     private String resolveFullName(UserProfile userProfile) {
@@ -713,6 +775,41 @@ public class ConversationService {
                 firstName != null ? firstName.trim() : "",
                 lastName != null ? lastName.trim() : "").trim();
         return fullName.isEmpty() ? null : fullName;
+    }
+
+    private Map<UUID, UserProfile> loadUserProfilesByUserId(List<UUID> userIds) {
+        if (userIds == null || userIds.isEmpty()) {
+            return Map.of();
+        }
+
+        Map<UUID, UserProfile> profilesByUserId = new HashMap<>();
+        userProfileRepository.findAllById(userIds).stream()
+                .filter(userProfile -> !userProfile.isDeleted())
+                .forEach(userProfile -> profilesByUserId.put(userProfile.getUserId(), userProfile));
+        return profilesByUserId;
+    }
+
+    private String normalizeNullableText(String value) {
+        if (value == null) {
+            return null;
+        }
+
+        String normalizedValue = value.trim();
+        return normalizedValue.isEmpty() ? null : normalizedValue;
+    }
+
+    private void logGroupLifecycleMembers(String action, ConversationResponse response) {
+        if (response == null || response.getMembers() == null) {
+            return;
+        }
+
+        log.debug("[BE GROUP LIFECYCLE MEMBERS] action={} conversationId={} memberCount={} members={}",
+                action,
+                response.getId(),
+                response.getMembers().size(),
+                response.getMembers().stream()
+                        .map(member -> member.getUserId() + ":" + member.getRole())
+                        .toList());
     }
 
     private void updateUserSetting(
