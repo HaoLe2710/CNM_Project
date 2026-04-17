@@ -3,6 +3,7 @@ package fit.iuh.cnm_project_be.room.service;
 import fit.iuh.cnm_project_be.common.exception.BusinessException;
 import fit.iuh.cnm_project_be.common.exception.ForbiddenException;
 import fit.iuh.cnm_project_be.common.exception.NotFoundException;
+import fit.iuh.cnm_project_be.realtime.dto.RealtimeEvent;
 import fit.iuh.cnm_project_be.room.dto.ConversationResponse;
 import fit.iuh.cnm_project_be.room.dto.CreateConversationRequest;
 import fit.iuh.cnm_project_be.room.entity.Conversation;
@@ -33,6 +34,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
@@ -77,13 +79,10 @@ class ConversationServiceTest {
                 .thenReturn(Optional.of(activeUser(otherUserId, "Teammate", "https://cdn.example.com/teammate.png")));
         when(conversationRepository.findPrivateConversationByParticipants(creatorId, otherUserId))
                 .thenReturn(Optional.of(conversation));
+        when(conversationMemberRepository.findPartnerUserId(conversationId, creatorId))
+                .thenReturn(Optional.of(otherUserId));
         when(conversationUserSettingRepository.findByConversationIdAndUserId(conversationId, creatorId))
                 .thenReturn(Optional.empty());
-        when(conversationMemberRepository.findByConversationId(conversationId))
-                .thenReturn(List.of(
-                        member(conversationId, creatorId, MemberRole.OWNER),
-                        member(conversationId, otherUserId, MemberRole.MEMBER)
-                ));
         when(messageRepository.findVisibleMessages(any(), any(), any())).thenReturn(List.of());
         when(messageUserStateRepository.countUnreadMessages(conversationId, creatorId)).thenReturn(0L);
 
@@ -112,18 +111,13 @@ class ConversationServiceTest {
         request.setType(ConversationType.PRIVATE);
         request.setParticipantIds(List.of(otherUserId));
 
-        when(userProfileRepository.findById(creatorId))
-                .thenReturn(Optional.of(activeUser(creatorId, "Creator", "https://cdn.example.com/creator.png")));
         when(userProfileRepository.findById(otherUserId))
                 .thenReturn(Optional.of(activeUser(otherUserId, "Target User", "https://cdn.example.com/target.png")));
         when(conversationRepository.findPrivateConversationByParticipants(creatorId, otherUserId))
                 .thenReturn(Optional.empty());
         when(conversationRepository.save(any(Conversation.class))).thenReturn(savedConversation);
-        when(conversationMemberRepository.findByConversationId(conversationId))
-                .thenReturn(List.of(
-                        member(conversationId, creatorId, MemberRole.OWNER),
-                        member(conversationId, otherUserId, MemberRole.MEMBER)
-                ));
+        when(conversationMemberRepository.findPartnerUserId(conversationId, creatorId))
+                .thenReturn(Optional.of(otherUserId));
         when(conversationUserSettingRepository.findByConversationIdAndUserId(conversationId, creatorId))
                 .thenReturn(Optional.empty());
         when(conversationUserSettingRepository.findByConversationIdAndUserId(conversationId, otherUserId))
@@ -168,6 +162,98 @@ class ConversationServiceTest {
     }
 
     @Test
+    void getMyConversationsIncludesAuthoritativeGroupMembers() {
+        UUID ownerId = UUID.randomUUID();
+        UUID adminId = UUID.randomUUID();
+        UUID memberId = UUID.randomUUID();
+        UUID conversationId = UUID.randomUUID();
+        Conversation conversation = groupConversation(conversationId, ownerId);
+        conversation.setName("Audit Group");
+
+        when(conversationRepository.findAllByMemberId(ownerId)).thenReturn(List.of(conversation));
+        when(conversationUserSettingRepository.findByUserIdAndConversationIdIn(any(), any()))
+                .thenReturn(List.of());
+        when(conversationMemberRepository.findByConversationId(conversationId))
+                .thenReturn(List.of(
+                        member(conversationId, ownerId, MemberRole.OWNER),
+                        member(conversationId, adminId, MemberRole.ADMIN),
+                        member(conversationId, memberId, MemberRole.MEMBER)
+                ));
+        when(userProfileRepository.findAllById(any()))
+                .thenReturn(List.of(
+                        activeUser(ownerId, "Owner Name", "https://cdn.example.com/owner.png", "owner.user"),
+                        activeUser(adminId, "Admin Name", "https://cdn.example.com/admin.png", "admin.user"),
+                        activeUser(memberId, "Member Name", "https://cdn.example.com/member.png", "member.user")
+                ));
+        when(messageRepository.findVisibleMessages(any(), any(), any())).thenReturn(List.of());
+        when(messageUserStateRepository.countUnreadMessages(conversationId, ownerId)).thenReturn(0L);
+
+        ConversationResponse response = conversationService.getMyConversations(ownerId, false).get(0);
+
+        assertThat(response.getMembers())
+                .hasSize(3)
+                .extracting(member -> member.getUserId().toString(), member -> member.getRole().name())
+                .containsExactlyInAnyOrder(
+                        org.assertj.core.groups.Tuple.tuple(ownerId.toString(), "OWNER"),
+                        org.assertj.core.groups.Tuple.tuple(adminId.toString(), "ADMIN"),
+                        org.assertj.core.groups.Tuple.tuple(memberId.toString(), "MEMBER")
+                );
+        assertThat(response.getMembers())
+                .anySatisfy(member -> {
+                    assertThat(member.getUserId()).isEqualTo(adminId);
+                    assertThat(member.getUsername()).isEqualTo("admin.user");
+                    assertThat(member.getDisplayName()).isEqualTo("Admin Name");
+                    assertThat(member.getAvatarUrl()).isEqualTo("https://cdn.example.com/admin.png");
+                    assertThat(member.getRole()).isEqualTo(MemberRole.ADMIN);
+                });
+    }
+
+    @Test
+    void createGroupConversationReturnsAuthoritativeMembers() {
+        UUID ownerId = UUID.randomUUID();
+        UUID memberId = UUID.randomUUID();
+        UUID conversationId = UUID.randomUUID();
+        Conversation savedConversation = groupConversation(conversationId, ownerId);
+        savedConversation.setName("New Group");
+
+        CreateConversationRequest request = new CreateConversationRequest();
+        request.setType(ConversationType.GROUP);
+        request.setName("New Group");
+        request.setParticipantIds(List.of(memberId));
+
+        when(userProfileRepository.findById(memberId))
+                .thenReturn(Optional.of(activeUser(memberId, "Member Name", "https://cdn.example.com/member.png", "member.user")));
+        when(conversationRepository.save(any(Conversation.class))).thenReturn(savedConversation);
+        when(conversationMemberRepository.findByConversationId(conversationId))
+                .thenReturn(List.of(
+                        member(conversationId, ownerId, MemberRole.OWNER),
+                        member(conversationId, memberId, MemberRole.MEMBER)
+                ));
+        when(userProfileRepository.findAllById(any()))
+                .thenReturn(List.of(
+                        activeUser(ownerId, "Owner Name", "https://cdn.example.com/owner.png", "owner.user"),
+                        activeUser(memberId, "Member Name", "https://cdn.example.com/member.png", "member.user")
+                ));
+        when(conversationUserSettingRepository.findByConversationIdAndUserId(conversationId, ownerId))
+                .thenReturn(Optional.empty());
+        when(conversationUserSettingRepository.findByConversationIdAndUserId(conversationId, memberId))
+                .thenReturn(Optional.empty());
+        when(messageRepository.findVisibleMessages(any(), any(), any())).thenReturn(List.of());
+        when(messageUserStateRepository.countUnreadMessages(conversationId, ownerId)).thenReturn(0L);
+        when(messageUserStateRepository.countUnreadMessages(conversationId, memberId)).thenReturn(0L);
+
+        ConversationResponse response = conversationService.createConversation(ownerId, request);
+
+        assertThat(response.getMembers()).hasSize(2);
+        assertThat(response.getMembers())
+                .extracting(member -> member.getUserId().toString(), member -> member.getRole().name())
+                .containsExactlyInAnyOrder(
+                        org.assertj.core.groups.Tuple.tuple(ownerId.toString(), "OWNER"),
+                        org.assertj.core.groups.Tuple.tuple(memberId.toString(), "MEMBER")
+                );
+    }
+
+    @Test
     void addMemberAddsUserToGroupConversation() {
         UUID conversationId = UUID.randomUUID();
         UUID ownerId = UUID.randomUUID();
@@ -191,6 +277,12 @@ class ConversationServiceTest {
         ConversationResponse response = conversationService.addMember(conversationId, ownerId, newUserId);
 
         assertThat(response.getId()).isEqualTo(conversationId);
+        assertThat(response.getMembers())
+                .extracting(member -> member.getUserId().toString(), member -> member.getRole().name())
+                .containsExactlyInAnyOrder(
+                        org.assertj.core.groups.Tuple.tuple(ownerId.toString(), "OWNER"),
+                        org.assertj.core.groups.Tuple.tuple(newUserId.toString(), "MEMBER")
+                );
         verify(conversationMemberRepository).save(any(ConversationMember.class));
     }
 
@@ -316,12 +408,133 @@ class ConversationServiceTest {
         when(messageUserStateRepository.countUnreadMessages(conversationId, targetId)).thenReturn(0L);
         when(messageRepository.findVisibleMessages(any(), any(), any())).thenReturn(List.of());
 
-        conversationService.transferOwnership(conversationId, ownerId, targetId);
+        ConversationResponse response = conversationService.transferOwnership(conversationId, ownerId, targetId);
 
         assertThat(owner.getRole()).isEqualTo(MemberRole.ADMIN);
         assertThat(target.getRole()).isEqualTo(MemberRole.OWNER);
+        assertThat(response.getMembers())
+                .extracting(member -> member.getUserId().toString(), member -> member.getRole().name())
+                .containsExactlyInAnyOrder(
+                        org.assertj.core.groups.Tuple.tuple(ownerId.toString(), "ADMIN"),
+                        org.assertj.core.groups.Tuple.tuple(targetId.toString(), "OWNER")
+                );
         verify(conversationMemberRepository).save(owner);
         verify(conversationMemberRepository).save(target);
+    }
+
+    @Test
+    void removeMemberReturnsUpdatedAuthoritativeMembers() {
+        UUID conversationId = UUID.randomUUID();
+        UUID ownerId = UUID.randomUUID();
+        UUID removedUserId = UUID.randomUUID();
+        Conversation conversation = groupConversation(conversationId, ownerId);
+
+        when(conversationRepository.findById(conversationId)).thenReturn(Optional.of(conversation));
+        when(conversationMemberRepository.findByConversationIdAndUserId(conversationId, ownerId))
+                .thenReturn(Optional.of(member(conversationId, ownerId, MemberRole.OWNER)));
+        when(conversationMemberRepository.findByConversationIdAndUserId(conversationId, removedUserId))
+                .thenReturn(Optional.of(member(conversationId, removedUserId, MemberRole.MEMBER)));
+        when(conversationMemberRepository.findByConversationId(conversationId))
+                .thenReturn(List.of(member(conversationId, ownerId, MemberRole.OWNER)));
+        when(userProfileRepository.findAllById(any()))
+                .thenReturn(List.of(activeUser(ownerId)));
+        when(messageRepository.findVisibleMessages(any(), any(), any())).thenReturn(List.of());
+        when(messageUserStateRepository.countUnreadMessages(conversationId, ownerId)).thenReturn(0L);
+
+        ConversationResponse response = conversationService.removeMember(conversationId, ownerId, removedUserId);
+
+        assertThat(response.getMembers()).hasSize(1);
+        assertThat(response.getMembers().get(0).getUserId()).isEqualTo(ownerId);
+        assertThat(response.getMembers().get(0).getRole()).isEqualTo(MemberRole.OWNER);
+        verify(conversationMemberRepository).deleteByConversationIdAndUserId(conversationId, removedUserId);
+    }
+
+    @Test
+    void promoteAndDemoteAdminReturnUpdatedAuthoritativeMembers() {
+        UUID conversationId = UUID.randomUUID();
+        UUID ownerId = UUID.randomUUID();
+        UUID targetId = UUID.randomUUID();
+        Conversation conversation = groupConversation(conversationId, ownerId);
+        ConversationMember owner = member(conversationId, ownerId, MemberRole.OWNER);
+        ConversationMember target = member(conversationId, targetId, MemberRole.MEMBER);
+
+        when(conversationRepository.findById(conversationId)).thenReturn(Optional.of(conversation));
+        when(conversationMemberRepository.findByConversationIdAndUserId(conversationId, ownerId))
+                .thenReturn(Optional.of(owner));
+        when(conversationMemberRepository.findByConversationIdAndUserId(conversationId, targetId))
+                .thenReturn(Optional.of(target));
+        when(userProfileRepository.findById(targetId)).thenReturn(Optional.of(activeUser(targetId)));
+        when(conversationMemberRepository.findByConversationId(conversationId))
+                .thenReturn(List.of(owner, target))
+                .thenReturn(List.of(owner, target));
+        when(userProfileRepository.findAllById(any()))
+                .thenReturn(List.of(activeUser(ownerId), activeUser(targetId)))
+                .thenReturn(List.of(activeUser(ownerId), activeUser(targetId)));
+        when(messageRepository.findVisibleMessages(any(), any(), any())).thenReturn(List.of());
+        when(messageUserStateRepository.countUnreadMessages(conversationId, ownerId)).thenReturn(0L);
+        when(messageUserStateRepository.countUnreadMessages(conversationId, targetId)).thenReturn(0L);
+
+        ConversationResponse promoteResponse = conversationService.promoteToAdmin(conversationId, ownerId, targetId);
+        assertThat(promoteResponse.getMembers())
+                .anySatisfy(member -> {
+                    assertThat(member.getUserId()).isEqualTo(targetId);
+                    assertThat(member.getRole()).isEqualTo(MemberRole.ADMIN);
+                });
+
+        ConversationResponse demoteResponse = conversationService.demoteAdmin(conversationId, ownerId, targetId);
+        assertThat(demoteResponse.getMembers())
+                .anySatisfy(member -> {
+                    assertThat(member.getUserId()).isEqualTo(targetId);
+                    assertThat(member.getRole()).isEqualTo(MemberRole.MEMBER);
+                });
+    }
+
+    @Test
+    void groupConversationRefreshPayloadIncludesAuthoritativeMembers() {
+        UUID conversationId = UUID.randomUUID();
+        UUID ownerId = UUID.randomUUID();
+        UUID memberId = UUID.randomUUID();
+        Conversation conversation = groupConversation(conversationId, ownerId);
+
+        when(conversationRepository.findById(conversationId)).thenReturn(Optional.of(conversation));
+        when(conversationMemberRepository.findByConversationIdAndUserId(conversationId, ownerId))
+                .thenReturn(Optional.of(member(conversationId, ownerId, MemberRole.OWNER)));
+        when(conversationRepository.save(conversation)).thenReturn(conversation);
+        when(conversationMemberRepository.findByConversationId(conversationId))
+                .thenReturn(List.of(
+                        member(conversationId, ownerId, MemberRole.OWNER),
+                        member(conversationId, memberId, MemberRole.MEMBER)
+                ));
+        when(userProfileRepository.findAllById(any()))
+                .thenReturn(List.of(
+                        activeUser(ownerId, "Owner", "https://cdn.example.com/owner.png", "owner.user"),
+                        activeUser(memberId, "Member", "https://cdn.example.com/member.png", "member.user")
+                ));
+        when(conversationUserSettingRepository.findByConversationIdAndUserId(conversationId, ownerId))
+                .thenReturn(Optional.empty());
+        when(conversationUserSettingRepository.findByConversationIdAndUserId(conversationId, memberId))
+                .thenReturn(Optional.empty());
+        when(messageRepository.findVisibleMessages(any(), any(), any())).thenReturn(List.of());
+        when(messageUserStateRepository.countUnreadMessages(conversationId, ownerId)).thenReturn(0L);
+        when(messageUserStateRepository.countUnreadMessages(conversationId, memberId)).thenReturn(1L);
+
+        conversationService.renameConversation(conversationId, ownerId, "Updated Group");
+
+        org.mockito.ArgumentCaptor<RealtimeEvent<?>> eventCaptor =
+                org.mockito.ArgumentCaptor.forClass((Class) RealtimeEvent.class);
+        verify(messagingTemplate, atLeastOnce())
+                .convertAndSend(eq("/topic/users/" + memberId + "/conversations"), eventCaptor.capture());
+        Object payload = eventCaptor.getValue().getPayload();
+
+        assertThat(payload).isInstanceOf(ConversationResponse.class);
+        ConversationResponse response = (ConversationResponse) payload;
+        assertThat(response.getMembers()).hasSize(2);
+        assertThat(response.getMembers())
+                .extracting(member -> member.getUserId().toString(), member -> member.getRole().name())
+                .containsExactlyInAnyOrder(
+                        org.assertj.core.groups.Tuple.tuple(ownerId.toString(), "OWNER"),
+                        org.assertj.core.groups.Tuple.tuple(memberId.toString(), "MEMBER")
+                );
     }
 
     @Test
@@ -670,7 +883,7 @@ class ConversationServiceTest {
     }
 
     @Test
-    void renameConversationSuppressesRefreshForNoneNotificationLevelMembers() {
+    void renameConversationStillRefreshesMembersWithNoneNotificationLevel() {
         UUID conversationId = UUID.randomUUID();
         UUID ownerId = UUID.randomUUID();
         UUID recipientId = UUID.randomUUID();
@@ -700,7 +913,7 @@ class ConversationServiceTest {
         conversationService.renameConversation(conversationId, ownerId, "Updated");
 
         verify(messagingTemplate).convertAndSend(eq("/topic/users/" + ownerId + "/conversations"), org.mockito.ArgumentMatchers.<Object>any());
-        verify(messagingTemplate, never()).convertAndSend(eq("/topic/users/" + recipientId + "/conversations"), org.mockito.ArgumentMatchers.<Object>any());
+        verify(messagingTemplate).convertAndSend(eq("/topic/users/" + recipientId + "/conversations"), org.mockito.ArgumentMatchers.<Object>any());
     }
 
     @Test
@@ -1067,14 +1280,18 @@ class ConversationServiceTest {
     }
 
     private UserProfile activeUser(UUID userId) {
-        return activeUser(userId, "User " + userId.toString().substring(0, 8), null);
+        return activeUser(userId, "User " + userId.toString().substring(0, 8), null, "user_" + userId.toString().substring(0, 8));
     }
 
     private UserProfile activeUser(UUID userId, String displayName, String avatarUrl) {
+        return activeUser(userId, displayName, avatarUrl, displayName);
+    }
+
+    private UserProfile activeUser(UUID userId, String displayName, String avatarUrl, String username) {
         UserProfile userProfile = new UserProfile();
         userProfile.setUserId(userId);
         userProfile.setDisplayName(displayName);
-        userProfile.setUsername(displayName);
+        userProfile.setUsername(username);
         userProfile.setAvatarUrl(avatarUrl);
         return userProfile;
     }

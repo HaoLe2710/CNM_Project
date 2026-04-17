@@ -16,6 +16,8 @@ public class MessageResponse {
     private Long id;
     private UUID conversationId;
     private UUID senderId;
+    private String senderDisplayName;
+    private String senderAvatarUrl;
     private String content;
     private MessageType type;
     private ReplyInfo replyTo;

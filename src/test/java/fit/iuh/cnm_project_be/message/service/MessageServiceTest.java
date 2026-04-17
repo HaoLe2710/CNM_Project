@@ -15,6 +15,8 @@ import fit.iuh.cnm_project_be.message.repository.MessageReactionRepository;
 import fit.iuh.cnm_project_be.message.repository.MessageRepository;
 import fit.iuh.cnm_project_be.message.repository.MessageStatusRepository;
 import fit.iuh.cnm_project_be.message.repository.MessageUserStateRepository;
+import fit.iuh.cnm_project_be.realtime.dto.RealtimeEvent;
+import fit.iuh.cnm_project_be.room.dto.ConversationResponse;
 import fit.iuh.cnm_project_be.room.entity.Conversation;
 import fit.iuh.cnm_project_be.room.entity.ConversationMember;
 import fit.iuh.cnm_project_be.room.entity.ConversationUserSetting;
@@ -131,6 +133,54 @@ class MessageServiceTest {
 
         assertThat(savedSenderState.getSeenAt()).isNotNull();
         assertThat(savedRecipientState.getSeenAt()).isNull();
+    }
+
+    @Test
+    void sendMessageIncludesSenderIdentityInResponseAndMessageCreatedPayload() {
+        UUID conversationId = UUID.randomUUID();
+        UUID senderId = UUID.randomUUID();
+        UUID recipientId = UUID.randomUUID();
+
+        Conversation conversation = new Conversation();
+        conversation.setId(conversationId);
+        conversation.setType(ConversationType.PRIVATE);
+        conversation.setCreatorId(senderId);
+
+        SendMessageRequest request = new SendMessageRequest();
+        request.setConversationId(conversationId);
+        request.setContent("hello");
+
+        MessageUserState senderState = new MessageUserState();
+        senderState.setMessageId(109L);
+        senderState.setUserId(senderId);
+        senderState.setSeenAt(Instant.now());
+
+        when(conversationRepository.findById(conversationId)).thenReturn(Optional.of(conversation));
+        when(conversationMemberRepository.existsByConversationIdAndUserId(conversationId, senderId)).thenReturn(true);
+        when(conversationMemberRepository.findByConversationId(conversationId))
+                .thenReturn(List.of(member(conversationId, senderId), member(conversationId, recipientId)));
+        when(messageRepository.save(any(Message.class))).thenAnswer(invocation -> {
+            Message message = invocation.getArgument(0);
+            message.setId(109L);
+            return message;
+        });
+        when(messageUserStateRepository.findByMessageIdAndUserId(109L, senderId)).thenReturn(Optional.of(senderState));
+        when(userProfileRepository.findById(senderId))
+                .thenReturn(Optional.of(activeUser(senderId, "sender.user", "Sender Name", "https://cdn.example.com/sender.png")));
+        when(messageRepository.findVisibleMessages(eq(conversationId), any(UUID.class), any())).thenReturn(List.of());
+        when(messageUserStateRepository.countUnreadMessages(eq(conversationId), any(UUID.class))).thenReturn(0L);
+
+        MessageResponse response = messageService.sendMessage(senderId, request);
+
+        assertThat(response.getSenderDisplayName()).isEqualTo("Sender Name");
+        assertThat(response.getSenderAvatarUrl()).isEqualTo("https://cdn.example.com/sender.png");
+
+        ArgumentCaptor<RealtimeEvent<?>> eventCaptor = ArgumentCaptor.forClass((Class) RealtimeEvent.class);
+        verify(messagingTemplate).convertAndSend(eq("/topic/conversations/" + conversationId), eventCaptor.capture());
+        assertThat(eventCaptor.getValue().getPayload()).isInstanceOf(MessageResponse.class);
+        MessageResponse realtimePayload = (MessageResponse) eventCaptor.getValue().getPayload();
+        assertThat(realtimePayload.getSenderDisplayName()).isEqualTo("Sender Name");
+        assertThat(realtimePayload.getSenderAvatarUrl()).isEqualTo("https://cdn.example.com/sender.png");
     }
 
     @Test
@@ -403,6 +453,60 @@ class MessageServiceTest {
     }
 
     @Test
+    void getMessagesIncludesSenderAndReplySenderIdentity() {
+        UUID conversationId = UUID.randomUUID();
+        UUID currentUserId = UUID.randomUUID();
+        UUID senderId = UUID.randomUUID();
+        UUID replySenderId = UUID.randomUUID();
+
+        Conversation conversation = new Conversation();
+        conversation.setId(conversationId);
+        conversation.setCreatorId(currentUserId);
+        conversation.setType(ConversationType.GROUP);
+
+        Message message = new Message();
+        message.setId(31L);
+        message.setConversationId(conversationId);
+        message.setSenderId(senderId);
+        message.setContent("replying");
+        message.setMessageType(MessageType.TEXT);
+        message.setCreatedAt(Instant.parse("2026-03-23T00:00:00Z"));
+        message.setReplyToMessageId(11L);
+        message.setReplyToSenderId(replySenderId);
+        message.setReplyToType(MessageType.IMAGE);
+        message.setReplyToContentPreview("preview");
+
+        Message repliedMessage = new Message();
+        repliedMessage.setId(11L);
+        repliedMessage.setConversationId(conversationId);
+        repliedMessage.setSenderId(replySenderId);
+        repliedMessage.setMessageType(MessageType.IMAGE);
+        repliedMessage.setContent("original");
+
+        when(conversationRepository.findById(conversationId)).thenReturn(Optional.of(conversation));
+        when(conversationMemberRepository.existsByConversationIdAndUserId(conversationId, currentUserId)).thenReturn(true);
+        when(messageRepository.findVisibleMessages(eq(conversationId), eq(currentUserId), any()))
+                .thenReturn(List.of(message));
+        when(messageAttachmentRepository.findByMessageIdIn(List.of(31L))).thenReturn(List.of());
+        when(messageReactionRepository.findByMessageIdIn(List.of(31L))).thenReturn(List.of());
+        when(messageUserStateRepository.findByMessageIdInAndUserId(List.of(31L), currentUserId)).thenReturn(List.of());
+        when(messageRepository.findAllById(List.of(11L))).thenReturn(List.of(repliedMessage));
+        when(userProfileRepository.findAllById(any(Iterable.class)))
+                .thenReturn(List.of(
+                        activeUser(senderId, "sender.user", "Sender Name", "https://cdn.example.com/sender.png"),
+                        activeUser(replySenderId, "reply.user", "Reply Name", "https://cdn.example.com/reply.png")
+                ));
+
+        MessageResponse response = messageService.getMessages(conversationId, currentUserId, null, 50).getItems().get(0);
+
+        assertThat(response.getSenderDisplayName()).isEqualTo("Sender Name");
+        assertThat(response.getSenderAvatarUrl()).isEqualTo("https://cdn.example.com/sender.png");
+        assertThat(response.getReplyTo()).isNotNull();
+        assertThat(response.getReplyTo().getSenderDisplayName()).isEqualTo("Reply Name");
+        assertThat(response.getReplyTo().getSenderAvatarUrl()).isEqualTo("https://cdn.example.com/reply.png");
+    }
+
+    @Test
     void editMessageUpdatesContentAndEditedAt() {
         UUID conversationId = UUID.randomUUID();
         UUID actorId = UUID.randomUUID();
@@ -422,11 +526,22 @@ class MessageServiceTest {
         when(messageRepository.save(message)).thenReturn(message);
         when(messageAttachmentRepository.findByMessageIdIn(List.of(20L))).thenReturn(List.of());
         when(messageReactionRepository.findByMessageIdIn(List.of(20L))).thenReturn(List.of());
+        when(userProfileRepository.findById(actorId))
+                .thenReturn(Optional.of(activeUser(actorId, "editor.user", "Editor Name", "https://cdn.example.com/editor.png")));
 
         MessageResponse response = messageService.editMessage(20L, actorId, request);
 
         assertThat(response.getContent()).isEqualTo("after");
         assertThat(response.getEditedAt()).isNotNull();
+        assertThat(response.getSenderDisplayName()).isEqualTo("Editor Name");
+        assertThat(response.getSenderAvatarUrl()).isEqualTo("https://cdn.example.com/editor.png");
+
+        ArgumentCaptor<RealtimeEvent<?>> eventCaptor = ArgumentCaptor.forClass((Class) RealtimeEvent.class);
+        verify(messagingTemplate).convertAndSend(eq("/topic/conversations/" + conversationId), eventCaptor.capture());
+        assertThat(eventCaptor.getValue().getPayload()).isInstanceOf(MessageResponse.class);
+        MessageResponse realtimePayload = (MessageResponse) eventCaptor.getValue().getPayload();
+        assertThat(realtimePayload.getSenderDisplayName()).isEqualTo("Editor Name");
+        assertThat(realtimePayload.getSenderAvatarUrl()).isEqualTo("https://cdn.example.com/editor.png");
     }
 
     @Test
@@ -499,7 +614,7 @@ class MessageServiceTest {
     }
 
     @Test
-    void sendMessageSuppressesConversationRefreshForNoneNotificationLevelMembers() {
+    void sendMessageStillDeliversUnreadRefreshForNoneNotificationLevelMembers() {
         UUID conversationId = UUID.randomUUID();
         UUID senderId = UUID.randomUUID();
         UUID recipientId = UUID.randomUUID();
@@ -539,12 +654,18 @@ class MessageServiceTest {
         when(conversationUserSettingRepository.findByConversationIdAndUserId(conversationId, recipientId))
                 .thenReturn(Optional.of(recipientSetting));
         when(messageRepository.findVisibleMessages(eq(conversationId), eq(senderId), any())).thenReturn(List.of());
+        when(messageRepository.findVisibleMessages(eq(conversationId), eq(recipientId), any())).thenReturn(List.of());
         when(messageUserStateRepository.countUnreadMessages(conversationId, senderId)).thenReturn(0L);
+        when(messageUserStateRepository.countUnreadMessages(conversationId, recipientId)).thenReturn(4L);
 
         messageService.sendMessage(senderId, request);
 
+        ArgumentCaptor<RealtimeEvent<?>> eventCaptor = ArgumentCaptor.forClass((Class) RealtimeEvent.class);
         verify(messagingTemplate).convertAndSend(eq("/topic/users/" + senderId + "/conversations"), org.mockito.ArgumentMatchers.<Object>any());
-        verify(messagingTemplate, never()).convertAndSend(eq("/topic/users/" + recipientId + "/conversations"), org.mockito.ArgumentMatchers.<Object>any());
+        verify(messagingTemplate).convertAndSend(eq("/topic/users/" + recipientId + "/conversations"), eventCaptor.capture());
+        assertThat(eventCaptor.getValue().getPayload()).isInstanceOf(ConversationResponse.class);
+        ConversationResponse response = (ConversationResponse) eventCaptor.getValue().getPayload();
+        assertThat(response.getUnreadCount()).isEqualTo(4L);
     }
 
     @Test
@@ -598,7 +719,7 @@ class MessageServiceTest {
     }
 
     @Test
-    void sendMessageDeliversMentionsOnlyRefreshForMentionedGroupMember() {
+    void sendMessageDeliversUnreadRefreshToAllMentionsOnlyGroupMembers() {
         UUID conversationId = UUID.randomUUID();
         UUID senderId = UUID.randomUUID();
         UUID mentionedUserId = UUID.randomUUID();
@@ -664,20 +785,27 @@ class MessageServiceTest {
                         activeUser(senderId, "sender"),
                         activeUser(mentionedUserId, "target"),
                         activeUser(otherUserId, "other")
+                ))
+                .thenReturn(List.of(
+                        activeUser(senderId, "sender"),
+                        activeUser(mentionedUserId, "target"),
+                        activeUser(otherUserId, "other")
                 ));
         when(messageRepository.findVisibleMessages(eq(conversationId), eq(senderId), any())).thenReturn(List.of());
         when(messageRepository.findVisibleMessages(eq(conversationId), eq(mentionedUserId), any())).thenReturn(List.of());
+        when(messageRepository.findVisibleMessages(eq(conversationId), eq(otherUserId), any())).thenReturn(List.of());
         when(messageUserStateRepository.countUnreadMessages(conversationId, senderId)).thenReturn(0L);
         when(messageUserStateRepository.countUnreadMessages(conversationId, mentionedUserId)).thenReturn(0L);
+        when(messageUserStateRepository.countUnreadMessages(conversationId, otherUserId)).thenReturn(3L);
 
         messageService.sendMessage(senderId, request);
 
         verify(messagingTemplate).convertAndSend(eq("/topic/users/" + mentionedUserId + "/conversations"), org.mockito.ArgumentMatchers.<Object>any());
-        verify(messagingTemplate, never()).convertAndSend(eq("/topic/users/" + otherUserId + "/conversations"), org.mockito.ArgumentMatchers.<Object>any());
+        verify(messagingTemplate).convertAndSend(eq("/topic/users/" + otherUserId + "/conversations"), org.mockito.ArgumentMatchers.<Object>any());
     }
 
     @Test
-    void sendMessageSuppressesMentionsOnlyRefreshForUnknownUsername() {
+    void sendMessageStillDeliversUnreadRefreshForMentionsOnlyGroupMemberWithoutMention() {
         UUID conversationId = UUID.randomUUID();
         UUID senderId = UUID.randomUUID();
         UUID recipientId = UUID.randomUUID();
@@ -719,13 +847,21 @@ class MessageServiceTest {
         when(conversationUserSettingRepository.findByConversationIdAndUserId(conversationId, recipientId))
                 .thenReturn(Optional.of(recipientSetting));
         when(userProfileRepository.findAllById(any(Iterable.class)))
+                .thenReturn(List.of(activeUser(senderId, "sender"), activeUser(recipientId, "target")))
                 .thenReturn(List.of(activeUser(senderId, "sender"), activeUser(recipientId, "target")));
         when(messageRepository.findVisibleMessages(eq(conversationId), eq(senderId), any())).thenReturn(List.of());
+        when(messageRepository.findVisibleMessages(eq(conversationId), eq(recipientId), any())).thenReturn(List.of());
         when(messageUserStateRepository.countUnreadMessages(conversationId, senderId)).thenReturn(0L);
+        when(messageUserStateRepository.countUnreadMessages(conversationId, recipientId)).thenReturn(2L);
 
         messageService.sendMessage(senderId, request);
 
-        verify(messagingTemplate, never()).convertAndSend(eq("/topic/users/" + recipientId + "/conversations"), org.mockito.ArgumentMatchers.<Object>any());
+        ArgumentCaptor<RealtimeEvent<?>> eventCaptor = ArgumentCaptor.forClass((Class) RealtimeEvent.class);
+        verify(messagingTemplate).convertAndSend(eq("/topic/users/" + recipientId + "/conversations"), eventCaptor.capture());
+        assertThat(eventCaptor.getValue().getPayload()).isInstanceOf(ConversationResponse.class);
+        ConversationResponse response = (ConversationResponse) eventCaptor.getValue().getPayload();
+        assertThat(response.getUnreadCount()).isEqualTo(2L);
+        assertThat(response.getMembers()).hasSize(2);
     }
 
     @Test
@@ -791,9 +927,15 @@ class MessageServiceTest {
     }
 
     private UserProfile activeUser(UUID userId, String username) {
+        return activeUser(userId, username, username, null);
+    }
+
+    private UserProfile activeUser(UUID userId, String username, String displayName, String avatarUrl) {
         UserProfile userProfile = new UserProfile();
         userProfile.setUserId(userId);
         userProfile.setUsername(username);
+        userProfile.setDisplayName(displayName);
+        userProfile.setAvatarUrl(avatarUrl);
         return userProfile;
     }
 
