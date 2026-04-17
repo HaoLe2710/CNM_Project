@@ -7,6 +7,7 @@ import jakarta.validation.constraints.Size;
 import lombok.*;
 import org.hibernate.annotations.SQLDelete;
 
+import java.time.LocalDate;
 import java.time.Instant;
 import java.util.UUID;
 
@@ -27,6 +28,7 @@ public class UserProfile extends BaseEntity {
     private String firstName;
     private String lastName;
     private String avatarUrl;
+    private String coverUrl;
 
     @Column(unique = true)
     private String username;
@@ -37,7 +39,14 @@ public class UserProfile extends BaseEntity {
     private String qrCodeUrl;
     private String bio;
     private String phone;
+    private String email;
+    private String gender;
+    private LocalDate dob;
+
+    // Trong UserProfile entity
+    @Column(name = "fcm_token")
+    private String fcmToken;
+
 
     private Instant bannedUntil;
-
 }

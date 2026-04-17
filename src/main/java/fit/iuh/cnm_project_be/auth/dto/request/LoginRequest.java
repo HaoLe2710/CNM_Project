@@ -1,6 +1,8 @@
 package fit.iuh.cnm_project_be.auth.dto.request;
 
+import fit.iuh.cnm_project_be.user.enums.Platform;
 import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.NotNull;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
@@ -14,9 +16,17 @@ import lombok.experimental.FieldDefaults;
 @AllArgsConstructor
 @FieldDefaults(level = AccessLevel.PRIVATE)
 public class LoginRequest {
-    @NotBlank(message = "Username cannot be empty")
+    @NotBlank(message = "Phone or email cannot be empty")
     String username;
 
     @NotBlank(message = "Password cannot be empty")
     String password;
+
+    @NotBlank(message = "Device ID cannot be empty")
+    String deviceId;
+
+    @NotNull(message = "Platform cannot be empty")
+    Platform platform;
+
+    String deviceName;
 }

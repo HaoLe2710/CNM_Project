@@ -6,7 +6,6 @@ import lombok.Builder;
 import lombok.Data;
 import lombok.experimental.FieldDefaults;
 
-import java.time.LocalDateTime;
 import java.util.List;
 import java.util.UUID;
 
@@ -14,9 +13,12 @@ import java.util.UUID;
 @FieldDefaults(level = AccessLevel.PRIVATE)
 @Builder
 public class LoginResponse {
-    String token;
-    String userName;
+    String email;
+    String phone;
     UUID userId;
-    LocalDateTime expiresIn;
     List<Role> roles;
+    String status;
+    String approvalId;
+    String deviceName;
+    String platform;
 }

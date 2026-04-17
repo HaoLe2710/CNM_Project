@@ -17,18 +17,24 @@ import java.util.UUID;
 @Setter
 @Builder
 @FieldDefaults(level = AccessLevel.PRIVATE)
-@SQLDelete(sql = "UPDATE accounts SET deleted_at = now() WHERE user_id = ?")
+@SQLDelete(sql = "UPDATE accounts SET deleted_at = now() WHERE id = ?")
 @Entity
 @Table(name = "accounts")
 public class Account extends BaseEntity {
     @Id
-    @GeneratedValue(strategy = GenerationType.IDENTITY)
-    long id;
+    @GeneratedValue(strategy = GenerationType.UUID)
+    UUID id;
 
     @Column(unique = true, nullable = false)
     String username;
 
-    @Column(unique = true, name = "user_id", nullable = false)
+    @Column(unique = true)
+    String email;
+
+    @Column(unique = true)
+    String phone;
+
+    @Column(nullable = false, name = "user_id")
     private UUID userId;
 
     @NotBlank(message = "Password can not be empty")
