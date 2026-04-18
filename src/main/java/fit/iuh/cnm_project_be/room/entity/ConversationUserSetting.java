@@ -1,6 +1,7 @@
 package fit.iuh.cnm_project_be.room.entity;
 
 import fit.iuh.cnm_project_be.room.enums.ConversationNotificationLevel;
+import fit.iuh.cnm_project_be.room.enums.ConversationBackgroundType;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.EnumType;
@@ -52,6 +53,16 @@ public class ConversationUserSetting {
 
     @Column(name = "custom_name")
     private String customName;
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "background_type")
+    private ConversationBackgroundType backgroundType;
+
+    @Column(name = "background_color")
+    private String backgroundColor;
+
+    @Column(name = "background_image_url")
+    private String backgroundImageUrl;
 
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;

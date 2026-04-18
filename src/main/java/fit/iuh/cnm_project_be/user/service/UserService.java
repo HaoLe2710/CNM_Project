@@ -1,12 +1,12 @@
 package fit.iuh.cnm_project_be.user.service;
 
 import fit.iuh.cnm_project_be.aws.AwsS3ImageService;
-import fit.iuh.cnm_project_be.user.entity.UserProfile;
-import fit.iuh.cnm_project_be.user.dto.request.UpdateUserProfileRequest;
-import fit.iuh.cnm_project_be.user.repository.UserProfileRepository;
-import fit.iuh.cnm_project_be.common.exception.NotFoundException;
 import fit.iuh.cnm_project_be.common.exception.BusinessException;
+import fit.iuh.cnm_project_be.common.exception.NotFoundException;
 import fit.iuh.cnm_project_be.common.exception.UnauthorizedException;
+import fit.iuh.cnm_project_be.user.dto.request.UpdateUserProfileRequest;
+import fit.iuh.cnm_project_be.user.entity.UserProfile;
+import fit.iuh.cnm_project_be.user.repository.UserProfileRepository;
 import jakarta.validation.constraints.NotNull;
 import lombok.RequiredArgsConstructor;
 import org.springframework.security.core.Authentication;
@@ -14,6 +14,8 @@ import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.context.request.RequestContextHolder;
+import org.springframework.web.context.request.ServletRequestAttributes;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.time.Instant;
@@ -35,21 +37,11 @@ public class UserService {
     }
 
     public UUID getCurrentUserId() {
-        // 1. Lấy thông tin xác thực từ Context hiện tại của Request
-        Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
-
-        // 2. Kiểm tra nếu đã xác thực và Principal là kiểu Jwt
-        if (authentication != null && authentication.getPrincipal() instanceof Jwt jwt) {
-
-            // 3. Lấy claim "userId" mà bạn đã nhét vào lúc generateToken
-            String userIdStr = jwt.getClaim("userId");
-
-            if (userIdStr != null) {
-                return UUID.fromString(userIdStr);
-            }
+        UUID userIdFromJwt = resolveUserIdFromJwt();
+        if (userIdFromJwt != null) {
+            return userIdFromJwt;
         }
-
-        return null;
+        return resolveUserIdFromHeader();
     }
 
     @Transactional
@@ -113,7 +105,14 @@ public class UserService {
     }
 
     @Transactional
-    public UserProfile createProfileForAccount(UUID userId, String username, String phone, String firstName, String lastName, LocalDate dob, @NotNull(message = "Gender cannot be empty") String gender) {
+    public UserProfile createProfileForAccount(
+            UUID userId,
+            String username,
+            String phone,
+            String firstName,
+            String lastName,
+            LocalDate dob,
+            @NotNull(message = "Gender cannot be empty") String gender) {
         if (userProfileRepository.existsById(userId)) {
             throw new BusinessException("User profile already exists");
         }
@@ -140,17 +139,23 @@ public class UserService {
 
     @Transactional(readOnly = true)
     public UserProfile getMyProfile() {
+        UUID userIdFromJwt = resolveUserIdFromJwt();
+        if (userIdFromJwt != null) {
+            return userProfileRepository.findById(userIdFromJwt)
+                    .filter(u -> u.getDeletedAt() == null)
+                    .orElseThrow(() -> new NotFoundException("User not found"));
+        }
+
+        UUID userIdFromHeader = resolveUserIdFromHeader();
+        if (userIdFromHeader != null) {
+            return userProfileRepository.findById(userIdFromHeader)
+                    .filter(u -> u.getDeletedAt() == null)
+                    .orElseThrow(() -> new NotFoundException("User not found"));
+        }
+
         Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
         if (authentication == null || !(authentication.getPrincipal() instanceof Jwt jwt)) {
             throw new UnauthorizedException("Unauthenticated");
-        }
-
-        String userIdClaim = jwt.getClaimAsString("userId");
-        if (userIdClaim != null && !userIdClaim.isBlank()) {
-            UUID userId = UUID.fromString(userIdClaim);
-            return userProfileRepository.findById(userId)
-                    .filter(u -> u.getDeletedAt() == null)
-                    .orElseThrow(() -> new NotFoundException("User not found"));
         }
 
         String username = jwt.getSubject();
@@ -162,7 +167,6 @@ public class UserService {
                 .orElseThrow(() -> new NotFoundException("User not found"));
     }
 
-    // Trong UserService
     @Transactional
     public void updateFcmToken(UUID userId, String fcmToken) {
         UserProfile user = getUser(userId);
@@ -170,4 +174,32 @@ public class UserService {
         userProfileRepository.save(user);
     }
 
+    private UUID resolveUserIdFromJwt() {
+        Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
+        if (authentication != null && authentication.getPrincipal() instanceof Jwt jwt) {
+            String userIdStr = jwt.getClaimAsString("userId");
+            if (userIdStr != null && !userIdStr.isBlank()) {
+                return UUID.fromString(userIdStr);
+            }
+        }
+        return null;
+    }
+
+    private UUID resolveUserIdFromHeader() {
+        ServletRequestAttributes attributes = (ServletRequestAttributes) RequestContextHolder.getRequestAttributes();
+        if (attributes == null) {
+            return null;
+        }
+
+        String userIdHeader = attributes.getRequest().getHeader("x-user-id");
+        if (userIdHeader == null || userIdHeader.isBlank()) {
+            return null;
+        }
+
+        try {
+            return UUID.fromString(userIdHeader.trim());
+        } catch (IllegalArgumentException ex) {
+            throw new UnauthorizedException("Invalid x-user-id header");
+        }
+    }
 }

@@ -4,6 +4,7 @@ import fit.iuh.cnm_project_be.common.exception.BusinessException;
 import fit.iuh.cnm_project_be.common.exception.ForbiddenException;
 import fit.iuh.cnm_project_be.common.exception.NotFoundException;
 import fit.iuh.cnm_project_be.message.entity.Message;
+import fit.iuh.cnm_project_be.message.dto.UploadAttachmentResponse;
 import fit.iuh.cnm_project_be.message.repository.MessageRepository;
 import fit.iuh.cnm_project_be.message.repository.MessageUserStateRepository;
 import fit.iuh.cnm_project_be.realtime.dto.RealtimeEvent;
@@ -11,10 +12,12 @@ import fit.iuh.cnm_project_be.realtime.dto.RealtimeEventType;
 import fit.iuh.cnm_project_be.room.dto.ConversationMemberResponse;
 import fit.iuh.cnm_project_be.room.dto.ConversationResponse;
 import fit.iuh.cnm_project_be.room.dto.ConversationStatusPayload;
+import fit.iuh.cnm_project_be.room.dto.ConversationBackgroundUploadResponse;
 import fit.iuh.cnm_project_be.room.dto.CreateConversationRequest;
 import fit.iuh.cnm_project_be.room.entity.Conversation;
 import fit.iuh.cnm_project_be.room.entity.ConversationMember;
 import fit.iuh.cnm_project_be.room.entity.ConversationUserSetting;
+import fit.iuh.cnm_project_be.room.enums.ConversationBackgroundType;
 import fit.iuh.cnm_project_be.room.enums.ConversationNotificationLevel;
 import fit.iuh.cnm_project_be.room.enums.ConversationType;
 import fit.iuh.cnm_project_be.room.enums.MemberRole;
@@ -23,12 +26,14 @@ import fit.iuh.cnm_project_be.room.repository.ConversationRepository;
 import fit.iuh.cnm_project_be.room.repository.ConversationUserSettingRepository;
 import fit.iuh.cnm_project_be.user.entity.UserProfile;
 import fit.iuh.cnm_project_be.user.repository.UserProfileRepository;
+import fit.iuh.cnm_project_be.storage.S3MediaStorageService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.multipart.MultipartFile;
 
 import java.time.Instant;
 import java.util.Comparator;
@@ -52,10 +57,13 @@ public class ConversationService {
     private final MessageRepository messageRepository;
     private final MessageUserStateRepository messageUserStateRepository;
     private final UserProfileRepository userProfileRepository;
+    private final S3MediaStorageService s3MediaStorageService;
     private final SimpMessagingTemplate messagingTemplate;
     private static final int MAX_CONVERSATION_NAME_LENGTH = 100;
     private static final int MAX_CONVERSATION_AVATAR_URL_LENGTH = 500;
     private static final int MAX_CUSTOM_CONVERSATION_NAME_LENGTH = 100;
+    private static final int MAX_BACKGROUND_COLOR_LENGTH = 32;
+    private static final int MAX_BACKGROUND_IMAGE_URL_LENGTH = 500;
 
     @Transactional(readOnly = true)
     public List<ConversationResponse> getMyConversations(UUID userId, boolean archived) {
@@ -312,6 +320,57 @@ public class ConversationService {
     }
 
     @Transactional
+    public void updateBackground(
+            UUID conversationId,
+            UUID actorUserId,
+            ConversationBackgroundType backgroundType,
+            String backgroundColor,
+            String backgroundImageUrl) {
+        Conversation conversation = getConversationOrThrow(conversationId);
+        ensureConversationMember(conversationId, actorUserId);
+
+        ConversationBackgroundType normalizedType = normalizeBackgroundType(backgroundType);
+        String normalizedColor = normalizeBackgroundColor(backgroundColor, normalizedType);
+        String normalizedImageUrl = normalizeBackgroundImageUrl(backgroundImageUrl, normalizedType);
+
+        ConversationUserSetting setting = conversationUserSettingRepository
+                .findByConversationIdAndUserId(conversationId, actorUserId)
+                .orElse(null);
+
+        if (setting == null) {
+            setting = new ConversationUserSetting();
+            setting.setConversationId(conversation.getId());
+            setting.setUserId(actorUserId);
+        }
+
+        if (Objects.equals(setting.getBackgroundType(), normalizedType)
+                && Objects.equals(setting.getBackgroundColor(), normalizedColor)
+                && Objects.equals(setting.getBackgroundImageUrl(), normalizedImageUrl)) {
+            return;
+        }
+
+        setting.setBackgroundType(normalizedType == ConversationBackgroundType.DEFAULT ? null : normalizedType);
+        setting.setBackgroundColor(normalizedColor);
+        setting.setBackgroundImageUrl(normalizedImageUrl);
+        conversationUserSettingRepository.save(setting);
+    }
+
+    @Transactional
+    public ConversationBackgroundUploadResponse uploadBackgroundImage(UUID conversationId, UUID actorUserId, MultipartFile file) {
+        getConversationOrThrow(conversationId);
+        ensureConversationMember(conversationId, actorUserId);
+
+        UploadAttachmentResponse upload = s3MediaStorageService.upload(actorUserId, file);
+        return ConversationBackgroundUploadResponse.builder()
+                .url(upload.getUrl())
+                .storageKey(upload.getStorageKey())
+                .fileName(upload.getFileName())
+                .contentType(upload.getContentType())
+                .fileSize(upload.getFileSize())
+                .build();
+    }
+
+    @Transactional
     public ConversationResponse addMember(UUID conversationId, UUID actorUserId, UUID targetUserId) {
         Conversation conversation = getConversationOrThrow(conversationId);
         ConversationMember actorMember = getMemberOrThrow(conversationId, actorUserId);
@@ -411,6 +470,9 @@ public class ConversationService {
                 .pinned(setting != null && setting.getPinnedAt() != null)
                 .notificationLevel(resolveNotificationLevel(setting))
                 .customName(setting != null ? setting.getCustomName() : null)
+                .backgroundType(resolveBackgroundType(setting))
+                .backgroundColor(setting != null ? setting.getBackgroundColor() : null)
+                .backgroundImageUrl(setting != null ? setting.getBackgroundImageUrl() : null)
                 .displayName(displayName)
 
                 .peerUserId(privatePeerInfo.userId())
@@ -685,6 +747,53 @@ public class ConversationService {
         }
 
         return normalizedCustomName;
+    }
+
+    private ConversationBackgroundType normalizeBackgroundType(ConversationBackgroundType backgroundType) {
+        if (backgroundType == null) {
+            throw new BusinessException("Background type is required");
+        }
+        return backgroundType;
+    }
+
+    private ConversationBackgroundType resolveBackgroundType(ConversationUserSetting setting) {
+        return setting != null && setting.getBackgroundType() != null
+                ? setting.getBackgroundType()
+                : ConversationBackgroundType.DEFAULT;
+    }
+
+    private String normalizeBackgroundColor(String backgroundColor, ConversationBackgroundType backgroundType) {
+        if (backgroundType != ConversationBackgroundType.COLOR) {
+            return null;
+        }
+        if (backgroundColor == null) {
+            throw new BusinessException("Background color is required for color background");
+        }
+        String normalized = backgroundColor.trim();
+        if (normalized.isEmpty()) {
+            throw new BusinessException("Background color must not be blank");
+        }
+        if (normalized.length() > MAX_BACKGROUND_COLOR_LENGTH) {
+            throw new BusinessException("Background color must be less than 32 characters");
+        }
+        return normalized;
+    }
+
+    private String normalizeBackgroundImageUrl(String backgroundImageUrl, ConversationBackgroundType backgroundType) {
+        if (backgroundType != ConversationBackgroundType.IMAGE) {
+            return null;
+        }
+        if (backgroundImageUrl == null) {
+            throw new BusinessException("Background image URL is required for image background");
+        }
+        String normalized = backgroundImageUrl.trim();
+        if (normalized.isEmpty()) {
+            throw new BusinessException("Background image URL must not be blank");
+        }
+        if (normalized.length() > MAX_BACKGROUND_IMAGE_URL_LENGTH) {
+            throw new BusinessException("Background image URL must be less than 500 characters");
+        }
+        return normalized;
     }
 
     private String resolveDisplayName(
