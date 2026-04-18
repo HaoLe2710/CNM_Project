@@ -1,6 +1,7 @@
 package fit.iuh.cnm_project_be.room.dto;
 
 import fit.iuh.cnm_project_be.room.enums.ConversationNotificationLevel;
+import fit.iuh.cnm_project_be.room.enums.ConversationBackgroundType;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
@@ -27,6 +28,9 @@ public class ConversationResponse {
     private boolean pinned;
     private ConversationNotificationLevel notificationLevel;
     private String customName;
+    private ConversationBackgroundType backgroundType;
+    private String backgroundColor;
+    private String backgroundImageUrl;
     private String displayName;
     private UUID peerUserId;
     private String peerDisplayName;
