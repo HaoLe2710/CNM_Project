@@ -21,13 +21,23 @@ import java.util.UUID;
 
 @Slf4j
 @Service
-@RequiredArgsConstructor
 public class CallService {
 
     private final CallRepository callRepository;
     private final UserProfileRepository userProfileRepository;
     private final FCMService fcmService;
     private final SimpMessagingTemplate messagingTemplate;
+
+    public CallService(
+            CallRepository callRepository,
+            UserProfileRepository userProfileRepository,
+            FCMService fcmService,
+            SimpMessagingTemplate messagingTemplate) {
+        this.callRepository = callRepository;
+        this.userProfileRepository = userProfileRepository;
+        this.fcmService = fcmService;
+        this.messagingTemplate = messagingTemplate;
+    }
 
     @Value("${app.sfu.url}")
     private String sfuUrl;
@@ -42,6 +52,15 @@ public class CallService {
             throw new IllegalArgumentException("Caller ID or Callee ID cannot be null");
         }
 
+        // Kiểm tra xem người gọi và người nhận có tồn tại không
+        boolean callerExists = userProfileRepository.existsById(callerId);
+        boolean calleeExists = userProfileRepository.existsById(request.calleeId());
+
+        if (!callerExists || !calleeExists) {
+            log.error("[CallService] ❌ Một trong hai phía không tồn tại: Caller={}, Callee={}", callerExists, calleeExists);
+            throw new RuntimeException("Một trong hai người dùng không tồn tại trong hệ thống");
+        }
+
         // Tạo channel (= roomId trên SFU)
         String channel = "call-" + UUID.randomUUID();
 
@@ -52,6 +71,7 @@ public class CallService {
         call.setType(request.type());
         call.setStatus(CallStatus.RINGING);
         callRepository.save(call);
+        log.info("[CallService] ✅ Call entity saved: {}", call.getId());
 
         // Đảm bảo sfuUrl có giá trị mặc định nếu @Value fail
         String currentSfuUrl = (sfuUrl != null) ? sfuUrl : "ws://192.168.1.25:4443";
@@ -70,6 +90,7 @@ public class CallService {
             stompPayload.put("roomId", channel);
             stompPayload.put("sfuUrl", currentSfuUrl);
             stompPayload.put("callType", request.type().toString());
+            stompPayload.put("type", request.type().toString()); // Đồng bộ tên trường cho Mobile (Legacy/Standard)
 
             Map<String, Object> stompEvent = new HashMap<>();
             stompEvent.put("type", "INCOMING_CALL");
@@ -79,9 +100,9 @@ public class CallService {
                     "/topic/users/" + request.calleeId() + "/calls",
                     (Object) stompEvent
             );
-            log.info("[CallService] STOMP signal sent to {}", request.calleeId());
+            log.info("[CallService] ✅ STOMP signal (INCOMING_CALL) sent to {}", request.calleeId());
         } catch (Exception e) {
-            log.error("[CallService] Failed to send STOMP signal: {}", e.getMessage());
+            log.error("[CallService] ❌ Failed to send STOMP signal to {}: {}", request.calleeId(), e.getMessage());
         }
 
         // 3. FCM: Gửi Push Notification (Để đánh thức app khi đang đóng)
