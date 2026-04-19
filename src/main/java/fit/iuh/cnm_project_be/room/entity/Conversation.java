@@ -2,6 +2,7 @@
 package fit.iuh.cnm_project_be.room.entity;
 
 import fit.iuh.cnm_project_be.common.entity.BaseEntity;
+import fit.iuh.cnm_project_be.room.enums.ConversationBackgroundType;
 import fit.iuh.cnm_project_be.room.enums.ConversationType;
 import fit.iuh.cnm_project_be.room.persistence.ConversationTypeConverter;
 import jakarta.persistence.*;
@@ -34,4 +35,14 @@ public class Conversation extends BaseEntity {
 
     @Column(name = "creator_id", nullable = false)
     private UUID creatorId;
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "background_type")
+    private ConversationBackgroundType backgroundType;
+
+    @Column(name = "background_color")
+    private String backgroundColor;
+
+    @Column(name = "background_image_url")
+    private String backgroundImageUrl;
 }
