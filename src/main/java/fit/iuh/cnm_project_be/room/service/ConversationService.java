@@ -333,26 +333,17 @@ public class ConversationService {
         String normalizedColor = normalizeBackgroundColor(backgroundColor, normalizedType);
         String normalizedImageUrl = normalizeBackgroundImageUrl(backgroundImageUrl, normalizedType);
 
-        ConversationUserSetting setting = conversationUserSettingRepository
-                .findByConversationIdAndUserId(conversationId, actorUserId)
-                .orElse(null);
-
-        if (setting == null) {
-            setting = new ConversationUserSetting();
-            setting.setConversationId(conversation.getId());
-            setting.setUserId(actorUserId);
-        }
-
-        if (Objects.equals(setting.getBackgroundType(), normalizedType)
-                && Objects.equals(setting.getBackgroundColor(), normalizedColor)
-                && Objects.equals(setting.getBackgroundImageUrl(), normalizedImageUrl)) {
+        if (Objects.equals(resolveConversationBackgroundType(conversation), normalizedType)
+                && Objects.equals(conversation.getBackgroundColor(), normalizedColor)
+                && Objects.equals(conversation.getBackgroundImageUrl(), normalizedImageUrl)) {
             return;
         }
 
-        setting.setBackgroundType(normalizedType == ConversationBackgroundType.DEFAULT ? null : normalizedType);
-        setting.setBackgroundColor(normalizedColor);
-        setting.setBackgroundImageUrl(normalizedImageUrl);
-        conversationUserSettingRepository.save(setting);
+        conversation.setBackgroundType(normalizedType == ConversationBackgroundType.DEFAULT ? null : normalizedType);
+        conversation.setBackgroundColor(normalizedColor);
+        conversation.setBackgroundImageUrl(normalizedImageUrl);
+        Conversation savedConversation = conversationRepository.save(conversation);
+        broadcastConversationUpdates(savedConversation.getId());
     }
 
     @Transactional
@@ -470,9 +461,9 @@ public class ConversationService {
                 .pinned(setting != null && setting.getPinnedAt() != null)
                 .notificationLevel(resolveNotificationLevel(setting))
                 .customName(setting != null ? setting.getCustomName() : null)
-                .backgroundType(resolveBackgroundType(setting))
-                .backgroundColor(setting != null ? setting.getBackgroundColor() : null)
-                .backgroundImageUrl(setting != null ? setting.getBackgroundImageUrl() : null)
+                .backgroundType(resolveConversationBackgroundType(conv))
+                .backgroundColor(conv.getBackgroundColor())
+                .backgroundImageUrl(conv.getBackgroundImageUrl())
                 .displayName(displayName)
 
                 .peerUserId(privatePeerInfo.userId())
@@ -756,9 +747,9 @@ public class ConversationService {
         return backgroundType;
     }
 
-    private ConversationBackgroundType resolveBackgroundType(ConversationUserSetting setting) {
-        return setting != null && setting.getBackgroundType() != null
-                ? setting.getBackgroundType()
+    private ConversationBackgroundType resolveConversationBackgroundType(Conversation conversation) {
+        return conversation.getBackgroundType() != null
+                ? conversation.getBackgroundType()
                 : ConversationBackgroundType.DEFAULT;
     }
 
