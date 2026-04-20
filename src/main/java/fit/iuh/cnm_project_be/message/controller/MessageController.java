@@ -3,6 +3,7 @@ package fit.iuh.cnm_project_be.message.controller;
 import fit.iuh.cnm_project_be.common.api.ApiResponse;
 import fit.iuh.cnm_project_be.message.dto.CursorPageResponse;
 import fit.iuh.cnm_project_be.message.dto.EditMessageRequest;
+import fit.iuh.cnm_project_be.message.dto.PinMessageRequest;
 import fit.iuh.cnm_project_be.message.dto.MessageReactionRequest;
 import fit.iuh.cnm_project_be.message.dto.MessageResponse;
 import fit.iuh.cnm_project_be.message.dto.SendMessageRequest;
@@ -53,6 +54,14 @@ public class MessageController {
             @Valid @RequestBody EditMessageRequest request,
             @RequestHeader("x-user-id") UUID currentUserId) {
         return ApiResponse.ok(messageService.editMessage(messageId, currentUserId, request), UUID.randomUUID().toString());
+    }
+
+    @PatchMapping("/{messageId}/pin")
+    public ApiResponse<MessageResponse> updatePinState(
+            @PathVariable Long messageId,
+            @Valid @RequestBody PinMessageRequest request,
+            @RequestHeader("x-user-id") UUID currentUserId) {
+        return ApiResponse.ok(messageService.updatePinState(messageId, currentUserId, request.getPinned()), UUID.randomUUID().toString());
     }
 
     @PatchMapping("/{messageId}/status")

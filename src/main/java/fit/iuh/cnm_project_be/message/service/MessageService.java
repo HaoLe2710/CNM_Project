@@ -40,6 +40,7 @@ import fit.iuh.cnm_project_be.room.entity.ConversationMember;
 import fit.iuh.cnm_project_be.room.entity.ConversationUserSetting;
 import fit.iuh.cnm_project_be.room.enums.ConversationNotificationLevel;
 import fit.iuh.cnm_project_be.room.enums.ConversationType;
+import fit.iuh.cnm_project_be.room.enums.MemberRole;
 import fit.iuh.cnm_project_be.room.repository.ConversationMemberRepository;
 import fit.iuh.cnm_project_be.room.repository.ConversationRepository;
 import fit.iuh.cnm_project_be.room.repository.ConversationUserSettingRepository;
@@ -188,6 +189,29 @@ public class MessageService {
         List<MessageAttachment> attachments = messageAttachmentRepository.findByMessageIdIn(List.of(savedMessage.getId()));
         List<MessageReaction> reactions = messageReactionRepository.findByMessageIdIn(List.of(savedMessage.getId()));
         MessageResponse response = mapToResponse(savedMessage, actorId, attachments, reactions);
+
+        messagingTemplate.convertAndSend("/topic/conversations/" + savedMessage.getConversationId(),
+                RealtimeEvent.of(RealtimeEventType.MESSAGE_UPDATED, response));
+
+        return response;
+    }
+
+    @Transactional
+    public MessageResponse updatePinState(Long messageId, UUID actorId, boolean pinned) {
+        Message message = getVisibleMessageOrThrow(messageId);
+        Conversation conversation = getConversationOrThrow(message.getConversationId());
+        ConversationMember actorMember = getConversationMemberOrThrow(conversation.getId(), actorId);
+
+        ensureCanPinMessages(conversation, actorMember);
+
+        message.setPinnedAt(pinned ? Instant.now() : null);
+        Message savedMessage = messageRepository.save(message);
+
+        List<MessageAttachment> attachments = messageAttachmentRepository.findByMessageIdIn(List.of(savedMessage.getId()));
+        List<MessageReaction> reactions = messageReactionRepository.findByMessageIdIn(List.of(savedMessage.getId()));
+        MessageUserState actorState = messageUserStateRepository.findByMessageIdAndUserId(savedMessage.getId(), actorId)
+                .orElse(null);
+        MessageResponse response = mapToResponse(savedMessage, actorId, attachments, reactions, actorState);
 
         messagingTemplate.convertAndSend("/topic/conversations/" + savedMessage.getConversationId(),
                 RealtimeEvent.of(RealtimeEventType.MESSAGE_UPDATED, response));
@@ -491,6 +515,7 @@ public class MessageService {
                 .seen(resolveSeen(state))
                 .createdAt(message.getCreatedAt())
                 .editedAt(message.getEditedAt())
+                .pinnedAt(message.getPinnedAt())
                 .build();
     }
 
@@ -714,8 +739,20 @@ public class MessageService {
     }
 
     private void ensureConversationMember(UUID conversationId, UUID userId) {
-        if (!conversationMemberRepository.existsByConversationIdAndUserId(conversationId, userId)) {
-            throw new ForbiddenException("User does not belong to this conversation");
+        getConversationMemberOrThrow(conversationId, userId);
+    }
+
+    private ConversationMember getConversationMemberOrThrow(UUID conversationId, UUID userId) {
+        return conversationMemberRepository.findByConversationIdAndUserId(conversationId, userId)
+                .orElseThrow(() -> new ForbiddenException("User does not belong to this conversation"));
+    }
+
+    private void ensureCanPinMessages(Conversation conversation, ConversationMember actorMember) {
+        if (conversation.getType() != ConversationType.GROUP) {
+            return;
+        }
+        if (actorMember.getRole() != MemberRole.OWNER && actorMember.getRole() != MemberRole.ADMIN) {
+            throw new ForbiddenException("Only owners or admins can pin group messages");
         }
     }
 
