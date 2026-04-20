@@ -23,69 +23,66 @@ import java.time.Duration;
 @AllArgsConstructor
 @Slf4j
 public class LoginService {
-    static long ACCESS_TOKEN_EXPIRE_MINUTES = 15;
+        static long ACCESS_TOKEN_EXPIRE_MINUTES = 15;
 
-    AccountRepository accountRepository;
-    PasswordEncoder passwordEncoder;
-    JwtUtils jwtUtils;
-    UserDeviceService userDeviceService;
-    TokenCookieService tokenCookieService;
-    TokenRedisService tokenRedisService;
-    DeviceLoginService deviceLoginService;
+        AccountRepository accountRepository;
+        PasswordEncoder passwordEncoder;
+        JwtUtils jwtUtils;
+        UserDeviceService userDeviceService;
+        TokenCookieService tokenCookieService;
+        TokenRedisService tokenRedisService;
+        DeviceLoginService deviceLoginService;
 
-    @Transactional
-    public LoginResponse login(LoginRequest request, HttpServletResponse response) {
-        String username = request.getUsername().trim();
+        @Transactional
+        public LoginResponse login(LoginRequest request, HttpServletResponse response) {
+                String username = request.getUsername().trim();
 
-        Account account = accountRepository.findByEmailOrPhone(username, username)
-                .orElseThrow(() -> new UnauthorizedException("Account does not exist"));
+                Account account = accountRepository.findByEmailOrPhone(username, username)
+                                .orElseThrow(() -> new UnauthorizedException("Account does not exist"));
 
-        if (!passwordEncoder.matches(request.getPassword(), account.getPassword())) {
-            throw new UnauthorizedException("Incorrect password");
+                if (!passwordEncoder.matches(request.getPassword(), account.getPassword())) {
+                        throw new UnauthorizedException("Incorrect password");
+                }
+
+                String platform = request.getPlatform().toString().toLowerCase();
+
+                if (deviceLoginService.shouldRequireApproval(
+                                account.getUserId(),
+                                request.getDeviceId(),
+                                request.getPlatform())) {
+                        log.info("[Login] - Approval required for user {} on new device {} ({})",
+                                        account.getUserId(), request.getDeviceId(), request.getPlatform());
+                        return deviceLoginService.createCredentialApprovalRequest(account, request);
+                }
+
+                userDeviceService.saveOrUpdateDevice(
+                                account.getUserId(),
+                                request.getDeviceId(),
+                                request.getPlatform(),
+                                request.getDeviceName());
+
+                String accessToken = jwtUtils.generateToken(account, request.getDeviceId(), platform);
+                String refreshToken = jwtUtils.generateRefreshToken();
+
+                tokenRedisService.saveRefreshToken(account.getUserId(), platform, refreshToken);
+
+                tokenCookieService.setTokenToCookie(
+                                response,
+                                "accessToken",
+                                accessToken,
+                                Duration.ofMinutes(ACCESS_TOKEN_EXPIRE_MINUTES));
+                tokenCookieService.setTokenToCookie(response, "refreshToken", refreshToken, Duration.ofDays(30));
+
+                log.info("[Login] - User {} logged in successfully on platform {}", account.getUserId(), platform);
+
+                return LoginResponse.builder()
+                                .email(account.getEmail())
+                                .phone(account.getPhone())
+                                .userId(account.getUserId())
+                                .roles(account.getRoles())
+                                .status("SUCCESS")
+                                .deviceName(request.getDeviceName())
+                                .platform(request.getPlatform().name())
+                                .build();
         }
-
-        String platform = request.getPlatform().toString().toLowerCase();
-
-        if (deviceLoginService.shouldRequireApproval(
-                account.getUserId(),
-                request.getDeviceId(),
-                request.getPlatform())
-        ) {
-            log.info("[Login] - Approval required for user {} on new device {} ({})",
-                    account.getUserId(), request.getDeviceId(), request.getPlatform());
-            return deviceLoginService.createCredentialApprovalRequest(account, request);
-        }
-
-        userDeviceService.saveOrUpdateDevice(
-                account.getUserId(),
-                request.getDeviceId(),
-                request.getPlatform(),
-                request.getDeviceName()
-        );
-
-        String accessToken = jwtUtils.generateToken(account, request.getDeviceId(), platform);
-        String refreshToken = jwtUtils.generateRefreshToken();
-
-        tokenRedisService.saveRefreshToken(account.getUserId(), platform, refreshToken);
-
-        tokenCookieService.setTokenToCookie(
-                response,
-                "accessToken",
-                accessToken,
-                Duration.ofMinutes(ACCESS_TOKEN_EXPIRE_MINUTES)
-        );
-        tokenCookieService.setTokenToCookie(response, "refreshToken", refreshToken, Duration.ofDays(30));
-
-        log.info("[Login] - User {} logged in successfully on platform {}", account.getUserId(), platform);
-
-        return LoginResponse.builder()
-                .email(account.getEmail())
-                .phone(account.getPhone())
-                .userId(account.getUserId())
-                .roles(account.getRoles())
-                .status("SUCCESS")
-                .deviceName(request.getDeviceName())
-                .platform(request.getPlatform().name())
-                .build();
-    }
 }

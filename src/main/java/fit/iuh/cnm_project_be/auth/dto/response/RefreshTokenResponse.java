@@ -12,4 +12,3 @@ import lombok.NoArgsConstructor;
 public class RefreshTokenResponse {
     private String message;
 }
-
