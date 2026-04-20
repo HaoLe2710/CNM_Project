@@ -70,6 +70,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
 import java.util.regex.Matcher;
@@ -84,6 +85,7 @@ public class MessageService {
     private static final int DEFAULT_MESSAGE_PAGE_SIZE = 50;
     private static final int MAX_MESSAGE_PAGE_SIZE = 100;
     private static final Pattern MENTION_PATTERN = Pattern.compile("(?<![A-Za-z0-9._])@([A-Za-z0-9._]+)");
+    private static final Pattern ABSOLUTE_URL_PATTERN = Pattern.compile("^(?i)https?://\\S+$");
 
     private final MessageRepository messageRepository;
     private final MessageAttachmentRepository messageAttachmentRepository;
@@ -105,11 +107,14 @@ public class MessageService {
         Conversation conversation = getConversationOrThrow(request.getConversationId());
         ensureConversationMember(conversation.getId(), senderId);
         validatePayload(request);
+        String normalizedContent = normalizeNullableText(request.getContent());
+        String resolvedOriginalLinkUrl = resolveOriginalLinkUrl(normalizedContent, request.getOriginalLinkUrl());
 
         Message message = new Message();
         message.setConversationId(conversation.getId());
         message.setSenderId(senderId);
-        message.setContent(request.getContent());
+        message.setContent(normalizedContent);
+        message.setOriginalLinkUrl(resolvedOriginalLinkUrl);
         message.setMessageType(resolveMessageType(request));
         applyReplySnapshot(message, request);
         Message savedMessage = messageRepository.save(message);
@@ -173,8 +178,10 @@ public class MessageService {
             throw new BusinessException("Only text messages can be edited");
         }
 
-        String updatedContent = validateEditedContent(request, message.getContent());
+        String updatedContent = validateEditedContent(request, message.getContent(), message.getOriginalLinkUrl());
+        String resolvedOriginalLinkUrl = resolveOriginalLinkUrl(updatedContent, request.getOriginalLinkUrl());
         message.setContent(updatedContent);
+        message.setOriginalLinkUrl(resolvedOriginalLinkUrl);
         message.setEditedAt(Instant.now());
         Message savedMessage = messageRepository.save(message);
 
@@ -475,6 +482,7 @@ public class MessageService {
                 .senderDisplayName(senderDisplayName)
                 .senderAvatarUrl(senderAvatarUrl)
                 .content(message.getContent())
+                .originalLinkUrl(resolveOriginalLinkUrl(message.getContent(), message.getOriginalLinkUrl()))
                 .type(message.getMessageType())
                 .replyTo(buildReplyInfo(message, profilesByUserId, replyMessagesByReplyToId))
                 .attachments(attachmentResponses)
@@ -591,22 +599,29 @@ public class MessageService {
     private void validatePayload(SendMessageRequest request) {
         boolean hasContent = request.getContent() != null && !request.getContent().isBlank();
         boolean hasAttachments = request.getAttachments() != null && !request.getAttachments().isEmpty();
+        boolean hasOriginalLinkUrl = request.getOriginalLinkUrl() != null && !request.getOriginalLinkUrl().isBlank();
 
-        if (!hasContent && !hasAttachments) {
-            throw new BusinessException("Message must contain text or attachments");
+        if (!hasContent && !hasAttachments && !hasOriginalLinkUrl) {
+            throw new BusinessException("Message must contain text, original link, or attachments");
         }
     }
 
-    private String validateEditedContent(EditMessageRequest request, String existingContent) {
-        if (request == null || request.getContent() == null) {
+    private String validateEditedContent(EditMessageRequest request, String existingContent, String existingOriginalLinkUrl) {
+        if (request == null) {
             throw new BusinessException("Message content is required");
         }
 
-        String trimmedContent = request.getContent().trim();
-        if (trimmedContent.isEmpty()) {
-            throw new BusinessException("Message content must not be blank");
+        String trimmedContent = request.getContent() == null ? null : request.getContent().trim();
+        String trimmedOriginalLinkUrl = normalizeLinkUrl(request.getOriginalLinkUrl());
+
+        if ((trimmedContent == null || trimmedContent.isEmpty())
+                && (trimmedOriginalLinkUrl == null || trimmedOriginalLinkUrl.isBlank())) {
+            throw new BusinessException("Message content or original link is required");
         }
-        if (trimmedContent.equals(existingContent == null ? null : existingContent.trim())) {
+
+        String normalizedExistingContent = existingContent == null ? null : existingContent.trim();
+        if (Objects.equals(trimmedContent, normalizedExistingContent)
+                && Objects.equals(trimmedOriginalLinkUrl, normalizeLinkUrl(existingOriginalLinkUrl))) {
             throw new BusinessException("Message content must be different from the current content");
         }
 
@@ -638,15 +653,19 @@ public class MessageService {
         message.setReplyToMessageId(repliedMessage.getId());
         message.setReplyToSenderId(repliedMessage.getSenderId());
         message.setReplyToType(repliedMessage.getMessageType());
-        message.setReplyToContentPreview(buildContentPreview(repliedMessage.getContent()));
+        message.setReplyToContentPreview(buildContentPreview(repliedMessage.getContent(), repliedMessage.getOriginalLinkUrl()));
     }
 
-    private String buildContentPreview(String content) {
-        if (content == null || content.isBlank()) {
+    private String buildContentPreview(String content, String originalLinkUrl) {
+        String source = content;
+        if (source == null || source.isBlank()) {
+            source = originalLinkUrl;
+        }
+        if (source == null || source.isBlank()) {
             return "";
         }
 
-        String trimmed = content.trim();
+        String trimmed = source.trim();
         return trimmed.length() <= 80 ? trimmed : trimmed.substring(0, 77) + "...";
     }
 
@@ -1010,5 +1029,30 @@ public class MessageService {
 
         String normalizedValue = value.trim();
         return normalizedValue.isEmpty() ? null : normalizedValue;
+    }
+
+    private String normalizeLinkUrl(String value) {
+        String normalizedValue = normalizeNullableText(value);
+        if (normalizedValue == null) {
+            return null;
+        }
+        if (normalizedValue.length() > 2000) {
+            throw new BusinessException("Original link URL must be less than 2000 characters");
+        }
+        return normalizedValue;
+    }
+
+    private String resolveOriginalLinkUrl(String content, String originalLinkUrl) {
+        String normalizedOriginalLinkUrl = normalizeLinkUrl(originalLinkUrl);
+        if (normalizedOriginalLinkUrl != null) {
+            return normalizedOriginalLinkUrl;
+        }
+
+        String normalizedContent = normalizeNullableText(content);
+        if (normalizedContent != null && ABSOLUTE_URL_PATTERN.matcher(normalizedContent).matches()) {
+            return normalizeLinkUrl(normalizedContent);
+        }
+
+        return null;
     }
 }
