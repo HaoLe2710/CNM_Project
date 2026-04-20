@@ -28,4 +28,5 @@ public class MessageResponse {
     private Boolean seen;
     private Instant createdAt;
     private Instant editedAt;
+    private Instant pinnedAt;
 }

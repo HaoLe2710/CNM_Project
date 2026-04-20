@@ -53,4 +53,7 @@ public class Message extends BaseEntity {
     @Column(name = "edited_at")
     private Instant editedAt;
 
+    @Column(name = "pinned_at")
+    private Instant pinnedAt;
+
 }
