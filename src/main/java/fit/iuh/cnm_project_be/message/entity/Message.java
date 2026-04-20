@@ -30,6 +30,9 @@ public class Message extends BaseEntity {
     @Column(columnDefinition = "text")
     private String content;
 
+    @Column(name = "original_link_url", columnDefinition = "text")
+    private String originalLinkUrl;
+
     @Column(name = "message_type", nullable = false)
     @Convert(converter = MessageTypeConverter.class)
     private MessageType messageType;
