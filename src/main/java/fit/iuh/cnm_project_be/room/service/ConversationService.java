@@ -113,6 +113,10 @@ public class ConversationService {
 
         conversation.setName(normalizedName);
         Conversation savedConversation = conversationRepository.save(conversation);
+        log.debug("[GROUP RENAME SYNC] conversationId={} actorUserId={} nextName={}",
+                conversationId,
+                actorUserId,
+                normalizedName);
         broadcastConversationUpdates(savedConversation.getId());
         ConversationResponse response = mapToResponse(savedConversation, actorUserId);
         logGroupLifecycleMembers("rename-group", response);
@@ -224,8 +228,22 @@ public class ConversationService {
         ensureOwner(actorMember);
 
         List<ConversationMember> members = conversationMemberRepository.findByConversationId(conversationId);
+        List<ConversationMember> removedMembers = members.stream()
+                .filter(member -> !member.getUserId().equals(actorUserId))
+                .toList();
+        log.info("[GROUP DISBAND] conversationId={} ownerId={} memberCount={}",
+                conversationId,
+                actorUserId,
+                members.size());
+        removedMembers.forEach(member -> {
+            log.info("[GROUP REMOVE MEMBERS] conversationId={} removedUserId={} role={}",
+                    conversationId,
+                    member.getUserId(),
+                    member.getRole());
+            conversationMemberRepository.deleteByConversationIdAndUserId(conversationId, member.getUserId());
+        });
         softDeleteConversation(conversation);
-        broadcastConversationDeleted(conversationId, members);
+        broadcastConversationDeleted(conversationId, members, true);
     }
 
     @Transactional
@@ -367,7 +385,7 @@ public class ConversationService {
         ConversationMember actorMember = getMemberOrThrow(conversationId, actorUserId);
 
         ensureGroupConversation(conversation);
-        ensureCanManageMembers(actorMember);
+        ensureCanAddMembers(actorMember);
         ensureUserExists(targetUserId);
 
         if (conversationMemberRepository.existsByConversationIdAndUserId(conversationId, targetUserId)) {
@@ -521,8 +539,15 @@ public class ConversationService {
                 throw new BusinessException("Private conversation must contain exactly two participants");
             }
         } else {
-            if (participantIds.size() < 2) {
-                throw new BusinessException("Group conversation must contain at least two participants");
+            long selectedParticipantCount = participantIds.stream()
+                    .filter(participantId -> !participantId.equals(creatorId))
+                    .count();
+            log.debug("[GROUP VALIDATION] creatorId={} selectedParticipantCount={} participantCount={}",
+                    creatorId,
+                    selectedParticipantCount,
+                    participantIds.size());
+            if (selectedParticipantCount < 2) {
+                throw new BusinessException("Group conversation must contain at least two selected members");
             }
             normalizeConversationName(request.getName());
         }
@@ -564,13 +589,18 @@ public class ConversationService {
             }
 
             ConversationResponse response = mapToResponse(conversation, member.getUserId(), setting);
+            log.debug("[GROUP RENAME SYNC] event=CONVERSATION_UPDATED conversationId={} recipientUserId={} displayName={} memberCount={}",
+                    conversationId,
+                    member.getUserId(),
+                    response.getDisplayName(),
+                    response.getMembers() != null ? response.getMembers().size() : 0);
             messagingTemplate.convertAndSend("/topic/users/" + member.getUserId() + "/conversations",
                     RealtimeEvent.of(RealtimeEventType.CONVERSATION_UPDATED, response));
         });
     }
 
-    private void broadcastConversationDeleted(UUID conversationId, List<ConversationMember> members) {
-        ConversationStatusPayload payload = new ConversationStatusPayload(conversationId, "DELETED");
+    private void broadcastConversationDeleted(UUID conversationId, List<ConversationMember> members, boolean isDisbanded) {
+        ConversationStatusPayload payload = new ConversationStatusPayload(conversationId, "DELETED", isDisbanded);
         members.forEach(
                 member -> messagingTemplate.convertAndSend("/topic/users/" + member.getUserId() + "/conversations",
                         RealtimeEvent.of(RealtimeEventType.CONVERSATION_UPDATED, payload)));
@@ -631,8 +661,20 @@ public class ConversationService {
     }
 
     private void ensureCanManageMembers(ConversationMember actorMember) {
+        log.debug("[GROUP ROLE CHECK] action=manage actorUserId={} actorRole={}",
+                actorMember.getUserId(),
+                actorMember.getRole());
         if (!isPrivilegedRole(actorMember.getRole())) {
             throw new ForbiddenException("Only owners or admins can manage members");
+        }
+    }
+
+    private void ensureCanAddMembers(ConversationMember actorMember) {
+        log.debug("[GROUP ROLE CHECK] action=add-member actorUserId={} actorRole={}",
+                actorMember.getUserId(),
+                actorMember.getRole());
+        if (actorMember.getRole() == null || actorMember.getRole() == MemberRole.GUEST) {
+            throw new ForbiddenException("Only conversation members can add members");
         }
     }
 
@@ -717,9 +759,12 @@ public class ConversationService {
                 .map(member -> mapConversationMember(member, profilesByUserId.get(member.getUserId())))
                 .toList();
 
-        log.debug("[BE GROUP RESPONSE MEMBERS] conversationId={} source=builder memberCount={}",
+        log.debug("[GROUP MEMBER MAP] conversationId={} source=builder memberCount={} members={}",
                 conversation.getId(),
-                memberResponses.size());
+                memberResponses.size(),
+                memberResponses.stream()
+                        .map(member -> member.getUserId() + ":" + member.getRole())
+                        .toList());
 
         return memberResponses;
     }

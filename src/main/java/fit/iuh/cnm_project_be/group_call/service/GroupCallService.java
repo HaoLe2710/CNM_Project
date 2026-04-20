@@ -173,6 +173,11 @@ public class GroupCallService {
             Map<String, Object> callMetadata = new HashMap<>();
             callMetadata.put("groupCallId", groupCall.getId());
             callMetadata.put("type", groupCall.getType());
+            callMetadata.put("callType", groupCall.getType());
+            callMetadata.put("status", "STARTED");
+            callMetadata.put("callerId", initiatorId);
+            callMetadata.put("conversationType", "GROUP");
+            callMetadata.put("conversationId", request.conversationId());
             callMetadata.put("channel", channel);
             callMetadata.put("sfuUrl", currentSfuUrl);
             callMetadata.put("initiatorName", initiatorName);

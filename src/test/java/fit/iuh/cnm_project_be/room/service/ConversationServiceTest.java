@@ -212,6 +212,7 @@ class ConversationServiceTest {
     void createGroupConversationReturnsAuthoritativeMembers() {
         UUID ownerId = UUID.randomUUID();
         UUID memberId = UUID.randomUUID();
+        UUID secondMemberId = UUID.randomUUID();
         UUID conversationId = UUID.randomUUID();
         Conversation savedConversation = groupConversation(conversationId, ownerId);
         savedConversation.setName("New Group");
@@ -219,38 +220,62 @@ class ConversationServiceTest {
         CreateConversationRequest request = new CreateConversationRequest();
         request.setType(ConversationType.GROUP);
         request.setName("New Group");
-        request.setParticipantIds(List.of(memberId));
+        request.setParticipantIds(List.of(memberId, secondMemberId));
 
         when(userProfileRepository.findById(memberId))
                 .thenReturn(Optional.of(activeUser(memberId, "Member Name", "https://cdn.example.com/member.png", "member.user")));
+        when(userProfileRepository.findById(secondMemberId))
+                .thenReturn(Optional.of(activeUser(secondMemberId, "Second Member", "https://cdn.example.com/second.png", "second.user")));
         when(conversationRepository.save(any(Conversation.class))).thenReturn(savedConversation);
         when(conversationMemberRepository.findByConversationId(conversationId))
                 .thenReturn(List.of(
                         member(conversationId, ownerId, MemberRole.OWNER),
-                        member(conversationId, memberId, MemberRole.MEMBER)
+                        member(conversationId, memberId, MemberRole.MEMBER),
+                        member(conversationId, secondMemberId, MemberRole.MEMBER)
                 ));
         when(userProfileRepository.findAllById(any()))
                 .thenReturn(List.of(
                         activeUser(ownerId, "Owner Name", "https://cdn.example.com/owner.png", "owner.user"),
-                        activeUser(memberId, "Member Name", "https://cdn.example.com/member.png", "member.user")
+                        activeUser(memberId, "Member Name", "https://cdn.example.com/member.png", "member.user"),
+                        activeUser(secondMemberId, "Second Member", "https://cdn.example.com/second.png", "second.user")
                 ));
         when(conversationUserSettingRepository.findByConversationIdAndUserId(conversationId, ownerId))
                 .thenReturn(Optional.empty());
         when(conversationUserSettingRepository.findByConversationIdAndUserId(conversationId, memberId))
                 .thenReturn(Optional.empty());
+        when(conversationUserSettingRepository.findByConversationIdAndUserId(conversationId, secondMemberId))
+                .thenReturn(Optional.empty());
         when(messageRepository.findVisibleMessages(any(), any(), any())).thenReturn(List.of());
         when(messageUserStateRepository.countUnreadMessages(conversationId, ownerId)).thenReturn(0L);
         when(messageUserStateRepository.countUnreadMessages(conversationId, memberId)).thenReturn(0L);
+        when(messageUserStateRepository.countUnreadMessages(conversationId, secondMemberId)).thenReturn(0L);
 
         ConversationResponse response = conversationService.createConversation(ownerId, request);
 
-        assertThat(response.getMembers()).hasSize(2);
+        assertThat(response.getMembers()).hasSize(3);
         assertThat(response.getMembers())
                 .extracting(member -> member.getUserId().toString(), member -> member.getRole().name())
                 .containsExactlyInAnyOrder(
                         org.assertj.core.groups.Tuple.tuple(ownerId.toString(), "OWNER"),
-                        org.assertj.core.groups.Tuple.tuple(memberId.toString(), "MEMBER")
+                        org.assertj.core.groups.Tuple.tuple(memberId.toString(), "MEMBER"),
+                        org.assertj.core.groups.Tuple.tuple(secondMemberId.toString(), "MEMBER")
                 );
+    }
+
+    @Test
+    void createGroupConversationRequiresAtLeastTwoSelectedMembers() {
+        UUID ownerId = UUID.randomUUID();
+        UUID memberId = UUID.randomUUID();
+
+        CreateConversationRequest request = new CreateConversationRequest();
+        request.setType(ConversationType.GROUP);
+        request.setName("Small Group");
+        request.setParticipantIds(List.of(memberId));
+
+        assertThatThrownBy(() -> conversationService.createConversation(ownerId, request))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("at least two selected members");
+        verifyNoInteractions(conversationRepository);
     }
 
     @Test
@@ -283,6 +308,36 @@ class ConversationServiceTest {
                         org.assertj.core.groups.Tuple.tuple(ownerId.toString(), "OWNER"),
                         org.assertj.core.groups.Tuple.tuple(newUserId.toString(), "MEMBER")
                 );
+        verify(conversationMemberRepository).save(any(ConversationMember.class));
+    }
+
+    @Test
+    void regularMemberCanAddUserToGroupConversation() {
+        UUID conversationId = UUID.randomUUID();
+        UUID ownerId = UUID.randomUUID();
+        UUID memberId = UUID.randomUUID();
+        UUID newUserId = UUID.randomUUID();
+        Conversation conversation = groupConversation(conversationId, ownerId);
+
+        when(conversationRepository.findById(conversationId)).thenReturn(Optional.of(conversation));
+        when(conversationMemberRepository.findByConversationIdAndUserId(conversationId, memberId))
+                .thenReturn(Optional.of(member(conversationId, memberId, MemberRole.MEMBER)));
+        when(userProfileRepository.findById(newUserId)).thenReturn(Optional.of(activeUser(newUserId)));
+        when(conversationMemberRepository.existsByConversationIdAndUserId(conversationId, newUserId)).thenReturn(false);
+        when(conversationMemberRepository.findByConversationId(conversationId))
+                .thenReturn(List.of(
+                        member(conversationId, ownerId, MemberRole.OWNER),
+                        member(conversationId, memberId, MemberRole.MEMBER),
+                        member(conversationId, newUserId, MemberRole.MEMBER)
+                ));
+        when(messageUserStateRepository.countUnreadMessages(conversationId, ownerId)).thenReturn(0L);
+        when(messageUserStateRepository.countUnreadMessages(conversationId, memberId)).thenReturn(0L);
+        when(messageUserStateRepository.countUnreadMessages(conversationId, newUserId)).thenReturn(0L);
+        when(messageRepository.findVisibleMessages(any(), any(), any())).thenReturn(List.of());
+
+        ConversationResponse response = conversationService.addMember(conversationId, memberId, newUserId);
+
+        assertThat(response.getId()).isEqualTo(conversationId);
         verify(conversationMemberRepository).save(any(ConversationMember.class));
     }
 
@@ -681,6 +736,7 @@ class ConversationServiceTest {
 
         assertThat(conversation.isDeleted()).isTrue();
         verify(conversationRepository).save(conversation);
+        verify(conversationMemberRepository).deleteByConversationIdAndUserId(conversationId, memberId);
     }
 
     @Test

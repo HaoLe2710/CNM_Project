@@ -398,7 +398,7 @@ public class MessageService {
 
         messagingTemplate.convertAndSend("/topic/users/" + userId + "/conversations/status",
                 RealtimeEvent.of(RealtimeEventType.CONVERSATION_UPDATED,
-                        new ConversationStatusPayload(conversationId, "SEEN")));
+                        new ConversationStatusPayload(conversationId, "SEEN", null)));
         broadcastConversationUpdates(conversationId);
     }
 
