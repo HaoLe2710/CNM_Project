@@ -7,6 +7,7 @@ import fit.iuh.cnm_project_be.message.dto.CursorPageResponse;
 import fit.iuh.cnm_project_be.message.dto.EditMessageRequest;
 import fit.iuh.cnm_project_be.message.dto.MessageAttachmentPayload;
 import fit.iuh.cnm_project_be.message.dto.MessageAttachmentResponse;
+import fit.iuh.cnm_project_be.message.dto.MessageContextResponse;
 import fit.iuh.cnm_project_be.message.dto.MessageDeletedPayload;
 import fit.iuh.cnm_project_be.message.dto.MessageReactionEventPayload;
 import fit.iuh.cnm_project_be.message.dto.MessageReactionRequest;
@@ -160,6 +161,62 @@ public class MessageService {
                 .items(items)
                 .nextCursor(nextCursor)
                 .hasMore(hasMore)
+                .build();
+    }
+
+    @Transactional(readOnly = true)
+    public MessageContextResponse getMessageContext(UUID conversationId, Long messageId, UUID currentUserId, int range) {
+        getConversationOrThrow(conversationId);
+        ensureConversationMember(conversationId, currentUserId);
+
+        int normalizedRange = normalizeContextRange(range);
+        int sideWindow = Math.max(1, normalizedRange / 2);
+
+        Message anchorMessage = getVisibleMessageForUserOrThrow(messageId, currentUserId);
+        if (!anchorMessage.getConversationId().equals(conversationId)) {
+            throw new BusinessException("Message does not belong to the requested conversation");
+        }
+
+        List<Message> olderMessages = messageRepository.findVisibleMessagesOlderThanAnchor(
+                conversationId,
+                currentUserId,
+                anchorMessage.getCreatedAt(),
+                anchorMessage.getId(),
+                PageRequest.of(0, sideWindow + 1)
+        );
+        boolean hasOlder = olderMessages.size() > sideWindow;
+        if (hasOlder) {
+            olderMessages = new ArrayList<>(olderMessages.subList(0, sideWindow));
+        }
+        Collections.reverse(olderMessages);
+
+        List<Message> newerMessages = messageRepository.findVisibleMessagesNewerThanAnchor(
+                conversationId,
+                currentUserId,
+                anchorMessage.getCreatedAt(),
+                anchorMessage.getId(),
+                PageRequest.of(0, sideWindow + 1)
+        );
+        boolean hasNewer = newerMessages.size() > sideWindow;
+        if (hasNewer) {
+            newerMessages = new ArrayList<>(newerMessages.subList(0, sideWindow));
+        }
+
+        List<Message> contextMessages = new ArrayList<>(olderMessages.size() + 1 + newerMessages.size());
+        contextMessages.addAll(olderMessages);
+        contextMessages.add(anchorMessage);
+        contextMessages.addAll(newerMessages);
+
+        List<MessageResponse> items = mapToResponses(contextMessages, currentUserId);
+        Message latestVisibleMessage = resolveLatestVisibleMessage(conversationId, currentUserId);
+
+        return MessageContextResponse.builder()
+                .anchorMessageId(anchorMessage.getId())
+                .items(items)
+                .hasOlder(hasOlder)
+                .hasNewer(hasNewer)
+                .latestMessageId(latestVisibleMessage != null ? latestVisibleMessage.getId() : null)
+                .latestCursor(latestVisibleMessage != null ? encodeCursor(latestVisibleMessage) : null)
                 .build();
     }
 
@@ -767,6 +824,15 @@ public class MessageService {
                 .orElseThrow(() -> new NotFoundException("Message not found"));
     }
 
+    private Message getVisibleMessageForUserOrThrow(Long messageId, UUID userId) {
+        Message message = getVisibleMessageOrThrow(messageId);
+        MessageUserState state = messageUserStateRepository.findByMessageIdAndUserId(messageId, userId).orElse(null);
+        if (state != null && (state.getHiddenAt() != null || state.getDeletedForMeAt() != null)) {
+            throw new NotFoundException("Message not found");
+        }
+        return message;
+    }
+
     private void broadcastConversationUpdates(UUID conversationId) {
         Conversation conversation = getConversationOrThrow(conversationId);
         conversationMemberRepository.findByConversationId(conversationId).forEach(member -> {
@@ -981,6 +1047,11 @@ public class MessageService {
         );
     }
 
+    private Message resolveLatestVisibleMessage(UUID conversationId, UUID userId) {
+        List<Message> latestMessages = messageRepository.findVisibleMessages(conversationId, userId, PageRequest.of(0, 1));
+        return latestMessages.isEmpty() ? null : latestMessages.get(0);
+    }
+
     private String encodeCursor(Message message) {
         String raw = message.getCreatedAt().toEpochMilli() + ":" + message.getId();
         return Base64.getUrlEncoder()
@@ -1077,6 +1148,13 @@ public class MessageService {
             throw new BusinessException("Original link URL must be less than 2000 characters");
         }
         return normalizedValue;
+    }
+
+    private int normalizeContextRange(int range) {
+        if (range <= 0) {
+            return DEFAULT_MESSAGE_PAGE_SIZE;
+        }
+        return Math.min(range, MAX_MESSAGE_PAGE_SIZE);
     }
 
     private String resolveOriginalLinkUrl(String content, String originalLinkUrl) {

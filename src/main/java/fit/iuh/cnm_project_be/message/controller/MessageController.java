@@ -3,6 +3,7 @@ package fit.iuh.cnm_project_be.message.controller;
 import fit.iuh.cnm_project_be.common.api.ApiResponse;
 import fit.iuh.cnm_project_be.message.dto.CursorPageResponse;
 import fit.iuh.cnm_project_be.message.dto.EditMessageRequest;
+import fit.iuh.cnm_project_be.message.dto.MessageContextResponse;
 import fit.iuh.cnm_project_be.message.dto.PinMessageRequest;
 import fit.iuh.cnm_project_be.message.dto.MessageReactionRequest;
 import fit.iuh.cnm_project_be.message.dto.MessageResponse;
@@ -46,6 +47,18 @@ public class MessageController {
             @RequestParam(defaultValue = "50") int size,
             @RequestHeader("x-user-id") UUID currentUserId) {
         return ApiResponse.ok(messageService.getMessages(conversationId, currentUserId, cursor, size), UUID.randomUUID().toString());
+    }
+
+    @GetMapping("/{conversationId}/context")
+    public ApiResponse<MessageContextResponse> getMessageContext(
+            @PathVariable UUID conversationId,
+            @RequestParam Long messageId,
+            @RequestParam(defaultValue = "50") int range,
+            @RequestHeader("x-user-id") UUID currentUserId) {
+        return ApiResponse.ok(
+                messageService.getMessageContext(conversationId, messageId, currentUserId, range),
+                UUID.randomUUID().toString()
+        );
     }
 
     @PatchMapping("/{messageId}")
