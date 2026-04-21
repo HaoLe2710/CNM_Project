@@ -10,7 +10,9 @@ import fit.iuh.cnm_project_be.auth.dto.response.LoginResponse;
 import fit.iuh.cnm_project_be.auth.dto.response.RegisterResponse;
 import fit.iuh.cnm_project_be.auth.dto.response.RefreshTokenResponse;
 import fit.iuh.cnm_project_be.auth.dto.response.UserDeviceResponseDto;
+import fit.iuh.cnm_project_be.user.enums.Platform;
 import fit.iuh.cnm_project_be.user.service.UserDeviceService;
+import fit.iuh.cnm_project_be.user.service.UserService;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.AccessLevel;
@@ -50,6 +52,8 @@ public class AuthService {
     RegistrationService registrationService;
     AccountService accountService;
     UserDeviceService userDeviceService;
+    UserService userService;
+    TokenRedisService tokenRedisService;
 
     /**
      * Đăng nhập và tạo tokens (access + refresh)
@@ -136,20 +140,34 @@ public class AuthService {
      * Đăng xuất device cụ thể
      */
     public void logoutDevice(UUID userId, String deviceId, String platform) {
-        userDeviceService.deleteDevice(userId, deviceId, platform);
-        log.info("[Device Logout] - User {} logged out from device {} on platform {}", userId, deviceId, platform);
+        String normalizedPlatform = platform == null ? "" : platform.trim().toLowerCase();
+        String normalizedDeviceId = deviceId == null ? null : deviceId.trim();
+
+        tokenRedisService.deleteRefreshTokensByScope(userId, normalizedPlatform, normalizedDeviceId);
+        userDeviceService.deleteDevice(userId, normalizedDeviceId, platform);
+
+        try {
+            Platform resolvedPlatform = Platform.valueOf(platform.toUpperCase());
+            if (resolvedPlatform == Platform.ANDROID || resolvedPlatform == Platform.IOS) {
+                userService.updateFcmToken(userId, null);
+            }
+        } catch (IllegalArgumentException ignored) {
+            // Ignore invalid platform value for FCM cleanup.
+        }
+
+        log.info("[Device Logout] - User {} logged out from device {} on platform {}", userId, normalizedDeviceId, normalizedPlatform);
 
         try {
             String topicName = "/topic/auth/" + userId + "/device-logout";
             fit.iuh.cnm_project_be.auth.websocket.DeviceAuthWebSocketController.DeviceLogoutMessage response = 
                     fit.iuh.cnm_project_be.auth.websocket.DeviceAuthWebSocketController.DeviceLogoutMessage.builder()
-                    .deviceId(deviceId)
-                    .platform(platform)
+                    .deviceId(normalizedDeviceId)
+                    .platform(normalizedPlatform)
                     .message("Device logged out successfully")
                     .timestamp(System.currentTimeMillis())
                     .build();
             messagingTemplate.convertAndSend(topicName, response);
-            log.info("[WebSocket] - Logout notification sent to {} for device {}", topicName, deviceId);
+            log.info("[WebSocket] - Logout notification sent to {} for device {}", topicName, normalizedDeviceId);
         } catch (Exception e) {
             log.error("[WebSocket] - Error sending logout notification: {}", e.getMessage(), e);
         }

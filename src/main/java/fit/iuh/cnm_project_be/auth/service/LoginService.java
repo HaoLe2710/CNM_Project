@@ -64,7 +64,9 @@ public class LoginService {
                 String accessToken = jwtUtils.generateToken(account, request.getDeviceId(), platform);
                 String refreshToken = jwtUtils.generateRefreshToken();
 
-                tokenRedisService.saveRefreshToken(account.getUserId(), platform, refreshToken);
+                // Keep exactly one active session token per platform slot.
+                tokenRedisService.deleteRefreshTokensByScope(account.getUserId(), platform);
+                tokenRedisService.saveRefreshToken(account.getUserId(), platform, request.getDeviceId(), refreshToken);
 
                 tokenCookieService.setTokenToCookie(
                                 response,
