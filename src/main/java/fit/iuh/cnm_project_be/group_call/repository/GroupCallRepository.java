@@ -14,4 +14,6 @@ public interface GroupCallRepository extends JpaRepository<GroupCall, UUID> {
     List<GroupCall> findByConversationIdOrderByCreatedAtDesc(UUID conversationId);
 
     List<GroupCall> findByConversationIdAndStatusOrderByCreatedAtDesc(UUID conversationId, GroupCallStatus status);
+
+    List<GroupCall> findByStatus(GroupCallStatus status);
 }
