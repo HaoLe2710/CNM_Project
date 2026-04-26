@@ -41,11 +41,18 @@ public class GroupCallController {
      * Tham gia cuộc gọi nhóm (bao gồm cả Late-join từ tin nhắn chat).
      */
     @PostMapping("/{groupCallId}/join")
-    public ResponseEntity<GroupCallResponse> joinGroupCall(
+    public ResponseEntity<?> joinGroupCall(
             @PathVariable UUID groupCallId,
             @AuthenticationPrincipal Jwt jwt) {
-        UUID userId = UUID.fromString(jwt.getClaimAsString("userId"));
-        return ResponseEntity.ok(groupCallService.joinGroupCall(groupCallId, userId));
+        try {
+            UUID userId = UUID.fromString(jwt.getClaimAsString("userId"));
+            return ResponseEntity.ok(groupCallService.joinGroupCall(groupCallId, userId));
+        } catch (org.springframework.web.server.ResponseStatusException e) {
+            // Trả về trực tiếp ResponseEntity 400 để Spring Boot không in lỗi đỏ ra Terminal
+            return ResponseEntity.status(e.getStatusCode()).body(java.util.Map.of("message", e.getReason()));
+        } catch (Exception e) {
+            return ResponseEntity.badRequest().body(java.util.Map.of("message", e.getMessage()));
+        }
     }
 
     /**
@@ -58,6 +65,18 @@ public class GroupCallController {
         UUID userId = UUID.fromString(jwt.getClaimAsString("userId"));
         groupCallService.leaveGroupCall(groupCallId, userId);
         return ResponseEntity.noContent().build();
+    }
+
+    /**
+     * Heartbeat ping (Client gọi mỗi 5s để báo vẫn đang ở trong phòng)
+     */
+    @PostMapping("/{groupCallId}/ping")
+    public ResponseEntity<Void> pingGroupCall(
+            @PathVariable UUID groupCallId,
+            @AuthenticationPrincipal Jwt jwt) {
+        UUID userId = UUID.fromString(jwt.getClaimAsString("userId"));
+        groupCallService.pingGroupCall(groupCallId, userId);
+        return ResponseEntity.ok().build();
     }
 
     /**

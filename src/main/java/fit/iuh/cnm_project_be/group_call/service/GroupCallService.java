@@ -23,6 +23,7 @@ import fit.iuh.cnm_project_be.realtime.dto.RealtimeEventType;
 import fit.iuh.cnm_project_be.room.repository.ConversationRepository;
 import fit.iuh.cnm_project_be.user.entity.UserProfile;
 import fit.iuh.cnm_project_be.user.repository.UserProfileRepository;
+import org.springframework.scheduling.annotation.Scheduled;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -248,7 +249,8 @@ public class GroupCallService {
                 .orElseThrow(() -> new RuntimeException("Cuộc gọi nhóm không tồn tại: " + groupCallId));
 
         if (groupCall.getStatus() == GroupCallStatus.ENDED) {
-            throw new IllegalStateException("Cuộc gọi nhóm đã kết thúc.");
+            throw new org.springframework.web.server.ResponseStatusException(
+                org.springframework.http.HttpStatus.BAD_REQUEST, "Cuộc gọi nhóm đã kết thúc.");
         }
 
         // Bảo mật: Kiểm tra xem user có phải thành viên của conversation này không
@@ -294,6 +296,15 @@ public class GroupCallService {
     }
 
     /**
+     * Heartbeat từ client để cập nhật thời gian hoạt động.
+     */
+    @Transactional
+    public void pingGroupCall(UUID groupCallId, UUID userId) {
+        // Dùng câu lệnh UPDATE trực tiếp để tránh Race Condition với việc leave
+        participantRepository.updateLastJoinedAtIfJoined(groupCallId, userId, Instant.now());
+    }
+
+    /**
      * Thành viên rời cuộc gọi nhóm.
      * Cộng dồn thời gian tham gia, cập nhật state LEFT (không xóa hàng).
      */
@@ -301,21 +312,26 @@ public class GroupCallService {
     public void leaveGroupCall(UUID groupCallId, UUID userId) {
         log.info("[GroupCallService] User {} leaving group call {}", userId, groupCallId);
 
-        GroupCallParticipant participant = participantRepository
-                .findByGroupCallIdAndUserId(groupCallId, userId)
-                .orElseThrow(() -> new RuntimeException("Không tìm thấy participant"));
+        participantRepository.findByGroupCallIdAndUserId(groupCallId, userId)
+                .ifPresent(participant -> {
+                    // Cộng dồn thời gian tham gia
+                    if (participant.getLastJoinedAt() != null) {
+                        long durationSeconds = Instant.now().getEpochSecond() - participant.getLastJoinedAt().getEpochSecond();
+                        participant.setTotalDuration(participant.getTotalDuration() + durationSeconds);
+                    }
+                    participant.setState(ParticipantState.LEFT);
+                    participantRepository.saveAndFlush(participant); // Bắt buộc lưu ngay lập tức
+                });
 
-        // Cộng dồn thời gian tham gia
-        if (participant.getLastJoinedAt() != null) {
-            long durationSeconds = Instant.now().getEpochSecond() - participant.getLastJoinedAt().getEpochSecond();
-            participant.setTotalDuration(participant.getTotalDuration() + durationSeconds);
-        }
-        participant.setState(ParticipantState.LEFT);
-        participantRepository.save(participant);
+        // Lấy danh sách đang JOINED
+        List<GroupCallParticipant> joinedParticipants = participantRepository
+                .findByGroupCallIdAndState(groupCallId, ParticipantState.JOINED);
+                
+        // Lọc chắc chắn người vừa rời khỏi đã không còn bị đếm nhầm do cache
+        long remainingJoined = joinedParticipants.stream()
+                .filter(p -> !p.getUserId().equals(userId))
+                .count();
 
-        // Nếu không còn ai JOINED → kết thúc cuộc gọi
-        long remainingJoined = participantRepository
-                .findByGroupCallIdAndState(groupCallId, ParticipantState.JOINED).size();
         if (remainingJoined == 0) {
             endGroupCall(groupCallId);
         }
@@ -328,6 +344,17 @@ public class GroupCallService {
     public void endGroupCall(UUID groupCallId) {
         GroupCall groupCall = groupCallRepository.findById(groupCallId)
                 .orElseThrow(() -> new RuntimeException("Không tìm thấy cuộc gọi nhóm: " + groupCallId));
+
+        // Đánh dấu mọi participant còn JOINED thành LEFT để đảm bảo DB đồng nhất 100%
+        participantRepository.findByGroupCallIdAndState(groupCallId, ParticipantState.JOINED)
+                .forEach(p -> {
+                    if (p.getLastJoinedAt() != null) {
+                        long durationSeconds = Instant.now().getEpochSecond() - p.getLastJoinedAt().getEpochSecond();
+                        p.setTotalDuration(p.getTotalDuration() + durationSeconds);
+                    }
+                    p.setState(ParticipantState.LEFT);
+                    participantRepository.save(p);
+                });
 
         groupCall.setStatus(GroupCallStatus.ENDED);
         groupCall.setEndedAt(Instant.now());
@@ -359,5 +386,53 @@ public class GroupCallService {
                 groupCall.getStatus(),
                 groupCall.getType()
         );
+    }
+
+    /**
+     * Dọn dẹp các cuộc gọi bị kẹt ở trạng thái RINGING hoặc ONGOING quá lâu
+     * Kết hợp quét Heartbeat của các user trong ONGOING và RINGING call.
+     */
+    @Scheduled(fixedRate = 15000) // Chạy mỗi 15 giây 1 lần
+    @Transactional
+    public void cleanUpStaleGroupCalls() {
+        Instant now = Instant.now();
+        Instant twoMinutesAgo = now.minusSeconds(120);
+        Instant pingTimeout = now.minusSeconds(15); // Nếu 15s không ping -> disconnect
+
+        // Lấy tất cả cuộc gọi đang hoạt động (RINGING hoặc ONGOING)
+        List<GroupCall> activeCalls = groupCallRepository.findAll().stream()
+                .filter(c -> c.getStatus() == GroupCallStatus.RINGING || c.getStatus() == GroupCallStatus.ONGOING)
+                .toList();
+
+        for (GroupCall call : activeCalls) {
+            boolean isRingingTooLong = call.getStatus() == GroupCallStatus.RINGING && call.getCreatedAt().isBefore(twoMinutesAgo);
+            boolean hasActiveParticipant = false;
+
+            // Kiểm tra heartbeat của những người đang JOINED
+            List<GroupCallParticipant> joinedParticipants = participantRepository
+                    .findByGroupCallIdAndState(call.getId(), ParticipantState.JOINED);
+
+            for (GroupCallParticipant p : joinedParticipants) {
+                // Nếu quá 15s không nhận được ping
+                if (p.getLastJoinedAt() == null || p.getLastJoinedAt().isBefore(pingTimeout)) {
+                    log.info("[GroupCallService-Cleanup] User {} timed out in call {}", p.getUserId(), call.getId());
+                    if (p.getLastJoinedAt() != null) {
+                        long durationSeconds = now.getEpochSecond() - p.getLastJoinedAt().getEpochSecond();
+                        p.setTotalDuration(p.getTotalDuration() + durationSeconds);
+                    }
+                    p.setState(ParticipantState.LEFT);
+                    participantRepository.save(p);
+                } else {
+                    hasActiveParticipant = true;
+                }
+            }
+
+            // Nếu không còn ai active hoặc bị kẹt RINGING quá lâu -> ENDED
+            if (!hasActiveParticipant || isRingingTooLong) {
+                log.info("[GroupCallService-Cleanup] Call {} ended. Active participants: {}, Timeout RINGING: {}", 
+                        call.getId(), hasActiveParticipant, isRingingTooLong);
+                endGroupCall(call.getId());
+            }
+        }
     }
 }
