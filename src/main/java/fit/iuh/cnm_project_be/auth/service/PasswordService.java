@@ -8,6 +8,7 @@ import fit.iuh.cnm_project_be.auth.enums.OtpType;
 import fit.iuh.cnm_project_be.auth.repository.AccountRepository;
 import fit.iuh.cnm_project_be.common.exception.BusinessException;
 import fit.iuh.cnm_project_be.common.exception.NotFoundException;
+import fit.iuh.cnm_project_be.user.service.UserDeviceService;
 import lombok.AccessLevel;
 import lombok.AllArgsConstructor;
 import lombok.experimental.FieldDefaults;
@@ -42,6 +43,8 @@ public class PasswordService {
     OtpService otpService;
     PasswordEncoder passwordEncoder;
     RedisTemplate<Object, Object> redisTemplate;
+    TokenRedisService tokenRedisService;
+    UserDeviceService userDeviceService;
 
     private static final int CHANGE_PASSWORD_TOKEN_EXPIRY = 10; // 10 phút
     private static final int FORGOT_PASSWORD_EXPIRY = 15; // 15 phút
@@ -247,12 +250,11 @@ public class PasswordService {
         redisTemplate.delete("reset:password:token:" + normalizedIdentifier);
 
         // 8. Xóa tất cả refresh tokens -> force logout all devices
-        String refreshTokenPattern = "refresh_token:" + account.getUserId() + ":*";
-        boolean hasDeletedKeys = Boolean.TRUE.equals(redisTemplate.delete(redisTemplate.keys(refreshTokenPattern)));
-
-        if (hasDeletedKeys) {
-            log.info("[ForgotPassword] - All refresh tokens deleted for userId: {}", account.getUserId());
-        }
+        tokenRedisService.deleteRefreshTokensByScope(account.getUserId(), "web");
+        tokenRedisService.deleteRefreshTokensByScope(account.getUserId(), "android");
+        tokenRedisService.deleteRefreshTokensByScope(account.getUserId(), "ios");
+        userDeviceService.deleteAllDevices(account.getUserId());
+        log.info("[ForgotPassword] - All refresh tokens deleted for userId: {}", account.getUserId());
 
         log.info("[ForgotPassword] - Password successfully reset for: {}", normalizedIdentifier);
     }
