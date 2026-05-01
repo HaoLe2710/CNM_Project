@@ -3,21 +3,18 @@ package fit.iuh.cnm_project_be.room.controller;
 import fit.iuh.cnm_project_be.common.api.ApiResponse;
 import fit.iuh.cnm_project_be.room.dto.AddConversationMemberRequest;
 import fit.iuh.cnm_project_be.room.dto.ArchiveConversationRequest;
-import fit.iuh.cnm_project_be.room.dto.ConversationBackgroundUploadResponse;
 import fit.iuh.cnm_project_be.room.dto.ConversationMemberRoleRequest;
 import fit.iuh.cnm_project_be.room.dto.ConversationResponse;
 import fit.iuh.cnm_project_be.room.dto.CreateConversationRequest;
 import fit.iuh.cnm_project_be.room.dto.MuteConversationRequest;
 import fit.iuh.cnm_project_be.room.dto.PinConversationRequest;
 import fit.iuh.cnm_project_be.room.dto.RenameConversationRequest;
-import fit.iuh.cnm_project_be.room.dto.UpdateConversationBackgroundRequest;
 import fit.iuh.cnm_project_be.room.dto.UpdateConversationCustomNameRequest;
 import fit.iuh.cnm_project_be.room.dto.UpdateConversationNotificationLevelRequest;
 import fit.iuh.cnm_project_be.room.dto.UpdateConversationAvatarRequest;
 import fit.iuh.cnm_project_be.room.service.ConversationService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
-import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PatchMapping;
@@ -28,8 +25,6 @@ import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
-import org.springframework.web.bind.annotation.RequestPart;
-import org.springframework.web.multipart.MultipartFile;
 
 import java.util.List;
 import java.util.UUID;
@@ -155,32 +150,6 @@ public class ConversationController {
             @RequestHeader("x-user-id") UUID userId) {
         conversationService.updateCustomName(conversationId, userId, request.getCustomName());
         return ApiResponse.ok(null, UUID.randomUUID().toString());
-    }
-
-    @PatchMapping("/{conversationId}/background")
-    public ApiResponse<Void> updateBackground(
-            @PathVariable UUID conversationId,
-            @Valid @RequestBody UpdateConversationBackgroundRequest request,
-            @RequestHeader("x-user-id") UUID userId) {
-        conversationService.updateBackground(
-                conversationId,
-                userId,
-                request.getBackgroundType(),
-                request.getBackgroundColor(),
-                request.getBackgroundImageUrl()
-        );
-        return ApiResponse.ok(null, UUID.randomUUID().toString());
-    }
-
-    @PostMapping(value = "/{conversationId}/background-image", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
-    public ApiResponse<ConversationBackgroundUploadResponse> uploadBackgroundImage(
-            @PathVariable UUID conversationId,
-            @RequestPart("file") MultipartFile file,
-            @RequestHeader("x-user-id") UUID userId) {
-        return ApiResponse.ok(
-                conversationService.uploadBackgroundImage(conversationId, userId, file),
-                UUID.randomUUID().toString()
-        );
     }
 
     @PostMapping("/{conversationId}/members")

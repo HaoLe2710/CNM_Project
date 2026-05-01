@@ -70,32 +70,32 @@ public class SecurityConfig {
                 .cors(Customizer.withDefaults())
                 .csrf(AbstractHttpConfigurer::disable)
                 .authorizeHttpRequests(auth -> auth
-                        .requestMatchers(PUBLIC_END_POINT).permitAll()
-                        .anyRequest().authenticated())
+                    .requestMatchers(PUBLIC_END_POINT).permitAll()
+                    .anyRequest().authenticated()
+                )
                 .oauth2ResourceServer(oauth2 -> oauth2
-                        // 1. Cấu hình để Spring tự tìm Token trong Cookie thay vì Header
-                        .bearerTokenResolver(request -> {
-                            Cookie[] cookies = request.getCookies();
-                            if (cookies != null) {
-                                for (Cookie cookie : cookies) {
-                                    if ("accessToken".equals(cookie.getName())) {
-                                        return cookie.getValue();
-                                    }
+                    // 1. Cấu hình để Spring tự tìm Token trong Cookie thay vì Header
+                    .bearerTokenResolver(request -> {
+                        Cookie[] cookies = request.getCookies();
+                        if (cookies != null) {
+                            for (Cookie cookie : cookies) {
+                                if ("accessToken".equals(cookie.getName())) {
+                                    return cookie.getValue();
                                 }
                             }
-                            return null;
-                        })
-                        .jwt(jwt -> jwt.jwtAuthenticationConverter(jwtAuthenticationConverter())));
+                        }
+                        return null;
+                    })
+                .jwt(jwt -> jwt.jwtAuthenticationConverter(jwtAuthenticationConverter()))
+                );
 
         return http.build();
     }
-
     // Hàm này giúp Spring hiểu "scope" trong JWT chính là các Authorities (Roles)
     @Bean
     public JwtAuthenticationConverter jwtAuthenticationConverter() {
         JwtGrantedAuthoritiesConverter authoritiesConverter = new JwtGrantedAuthoritiesConverter();
-        // Vì trong hàm generateToken bạn lưu dưới dạng "scope", mặc định Spring sẽ tìm
-        // claim này
+        // Vì trong hàm generateToken bạn lưu dưới dạng "scope", mặc định Spring sẽ tìm claim này
         // Chúng ta thêm tiền tố ROLE_ để dùng được hasRole('ADMIN')
         authoritiesConverter.setAuthorityPrefix("ROLE_");
         authoritiesConverter.setAuthoritiesClaimName("scope");
@@ -105,8 +105,7 @@ public class SecurityConfig {
         return converter;
     }
 
-    // Tong hop 2 key vao context de quan ly va lay ra moi khi can, khong can doc
-    // file pem lai
+//    Tong hop 2 key vao context de quan ly va lay ra moi khi can, khong can doc file pem lai
     @Bean
     public RSAKey rsaJwk() throws IOException, JOSEException {
         String privatePem = readPem(PRIVATE_KEY_PATH);
@@ -120,19 +119,19 @@ public class SecurityConfig {
                 .build();
     }
 
-    // lay private key tu context
+//    lay private key tu context
     @Bean
     public RSAPrivateKey rsaPrivateKey(RSAKey rsaJwk) throws JOSEException {
         return rsaJwk.toRSAPrivateKey();
     }
 
-    // lay public key tu context
+//    lay public key tu context
     @Bean
     public RSAPublicKey rsaPublicKey(RSAKey rsaJwk) throws JOSEException {
         return rsaJwk.toRSAPublicKey();
     }
 
-    // giai ma token
+//    giai ma token
     @Bean
     public JwtDecoder jwtDecoder(RSAPublicKey rsaPublicKey) {
         return NimbusJwtDecoder
@@ -140,7 +139,7 @@ public class SecurityConfig {
                 .build();
     }
 
-    // bao mat, chuyen thong tin user thanh token
+//bao mat, chuyen thong tin user thanh token
     @Bean
     JwtEncoder jwtEncoder(RSAPublicKey rsaPublicKey, RSAPrivateKey rsaPrivateKey) {
         RSAKey rsa = new RSAKey.Builder(rsaPublicKey)
@@ -151,13 +150,13 @@ public class SecurityConfig {
         return new NimbusJwtEncoder(jwtks);
     }
 
-    // ma hoa password cua user, tranh lo thong tin
+//    ma hoa password cua user, tranh lo thong tin
     @Bean
     public BCryptPasswordEncoder passwordEncoder() {
         return new BCryptPasswordEncoder();
     }
 
-    // doc file pem
+//    doc file pem
     private String readPem(String classpathFile) throws IOException {
         try (InputStream inputStream = new ClassPathResource(classpathFile).getInputStream()) {
             return StreamUtils.copyToString(inputStream, StandardCharsets.UTF_8);
@@ -181,8 +180,7 @@ public class SecurityConfig {
     }
 
     @Bean
-    CommandLineRunner initDatabase(AccountRepository accountRepository, PasswordEncoder passwordEncoder,
-            UserProfileRepository userProfileRepository, UserDeviceRepository userDeviceRepository) {
+    CommandLineRunner initDatabase(AccountRepository accountRepository, PasswordEncoder passwordEncoder, UserProfileRepository userProfileRepository, UserDeviceRepository userDeviceRepository) {
         UUID userId = UUID.randomUUID();
         return args -> {
             if (accountRepository.findByUsername("admin").isEmpty()) {
@@ -224,38 +222,41 @@ public class SecurityConfig {
             public void addCorsMappings(CorsRegistry registry) {
                 // Thêm CORS cho API
                 registry.addMapping("/api/**")
-                        .allowedOriginPatterns(
-                                "http://localhost:*",
-                                "http://127.0.0.1:*",
-                                "http://192.168.*:*",
-                                "http://10.*:*")
-                        .allowedMethods("GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH")
-                        .allowedHeaders("*")
-                        .allowCredentials(true)
-                        .maxAge(3600);
+                    .allowedOriginPatterns(
+                        "http://localhost:*",
+                        "http://127.0.0.1:*",
+                        "http://192.168.*:*",
+                        "http://10.*:*"
+                    )
+                    .allowedMethods("GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH")
+                    .allowedHeaders("*")
+                    .allowCredentials(true)
+                    .maxAge(3600);
 
                 // Thêm CORS cho WebSocket endpoints (cần cho SockJS handshake)
                 registry.addMapping("/ws/**")
-                        .allowedOriginPatterns(
-                                "http://localhost:*",
-                                "http://127.0.0.1:*",
-                                "http://192.168.*:*",
-                                "http://10.*:*")
-                        .allowedMethods("GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH")
-                        .allowedHeaders("*")
-                        .allowCredentials(true)
-                        .maxAge(3600);
+                    .allowedOriginPatterns(
+                        "http://localhost:*",
+                        "http://127.0.0.1:*",
+                        "http://192.168.*:*",
+                        "http://10.*:*"
+                    )
+                    .allowedMethods("GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH")
+                    .allowedHeaders("*")
+                    .allowCredentials(true)
+                    .maxAge(3600);
 
                 registry.addMapping("/auth/ws/**")
-                        .allowedOriginPatterns(
-                                "http://localhost:*",
-                                "http://127.0.0.1:*",
-                                "http://192.168.*:*",
-                                "http://10.*:*")
-                        .allowedMethods("GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH")
-                        .allowedHeaders("*")
-                        .allowCredentials(true)
-                        .maxAge(3600);
+                    .allowedOriginPatterns(
+                        "http://localhost:*",
+                        "http://127.0.0.1:*",
+                        "http://192.168.*:*",
+                        "http://10.*:*"
+                    )
+                    .allowedMethods("GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH")
+                    .allowedHeaders("*")
+                    .allowCredentials(true)
+                    .maxAge(3600);
             }
         };
     }

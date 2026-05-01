@@ -52,7 +52,7 @@ public class AuthRefreshService {
                     .orElseThrow(() -> new NotFoundException("Account not found"));
 
             // 4. Generate access token mới
-            String newAccessToken = jwtUtils.generateToken(account, tokenData.deviceId, tokenData.platform);
+            String newAccessToken = jwtUtils.generateToken(account, null, tokenData.platform);
 
             // 5. Set cookie mới (httpOnly)
             tokenCookieService.setTokenToCookie(response, "accessToken", newAccessToken, Duration.ofMinutes(ACCESS_TOKEN_EXPIRE_MINUTES));

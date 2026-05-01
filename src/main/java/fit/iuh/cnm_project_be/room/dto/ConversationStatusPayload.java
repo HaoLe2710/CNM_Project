@@ -12,5 +12,4 @@ import java.util.UUID;
 public class ConversationStatusPayload {
     private UUID conversationId;
     private String status;
-    private Boolean isDisbanded;
 }

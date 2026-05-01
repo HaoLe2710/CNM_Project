@@ -11,13 +11,11 @@ import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 
-import lombok.extern.slf4j.Slf4j;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
 @RestControllerAdvice
-@Slf4j
 public class GlobalExceptionHandler {
 
     private String resolveRequestId(HttpServletRequest request) {
@@ -66,8 +64,6 @@ public class GlobalExceptionHandler {
                         "reason", fieldError.getDefaultMessage()
                 ))
                 .toList();
-
-        log.warn("[{}] Validation error: {}", requestId, errors);
 
         return ResponseEntity.badRequest()
                 .contentType(MediaType.APPLICATION_JSON)
@@ -132,7 +128,8 @@ public class GlobalExceptionHandler {
             HttpServletRequest request) {
 
         String requestId = resolveRequestId(request);
-        log.error("[{}] Unexpected error: {}", requestId, ex.getMessage(), ex);
+//        ex.printStackTrace();
+        // TODO: log.error("Unexpected error", ex);
 
         return ResponseEntity.status(ErrorCode.INTERNAL_ERROR.status())
                 .contentType(MediaType.APPLICATION_JSON)

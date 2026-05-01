@@ -160,7 +160,7 @@ public class SocialController {
     }
 
     @PostMapping(value = "/media/upload", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
-    public ApiResponse<SocialMediaUploadResponse> uploadMedia(@RequestParam("file") MultipartFile file) {
+    public ApiResponse<SocialMediaUploadResponse> uploadMedia(@RequestPart("file") MultipartFile file) {
         return ApiResponse.ok(socialService.uploadMedia(file), UUID.randomUUID().toString());
     }
 }

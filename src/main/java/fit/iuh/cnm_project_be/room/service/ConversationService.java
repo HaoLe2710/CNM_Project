@@ -4,7 +4,6 @@ import fit.iuh.cnm_project_be.common.exception.BusinessException;
 import fit.iuh.cnm_project_be.common.exception.ForbiddenException;
 import fit.iuh.cnm_project_be.common.exception.NotFoundException;
 import fit.iuh.cnm_project_be.message.entity.Message;
-import fit.iuh.cnm_project_be.message.dto.UploadAttachmentResponse;
 import fit.iuh.cnm_project_be.message.repository.MessageRepository;
 import fit.iuh.cnm_project_be.message.repository.MessageUserStateRepository;
 import fit.iuh.cnm_project_be.realtime.dto.RealtimeEvent;
@@ -12,12 +11,10 @@ import fit.iuh.cnm_project_be.realtime.dto.RealtimeEventType;
 import fit.iuh.cnm_project_be.room.dto.ConversationMemberResponse;
 import fit.iuh.cnm_project_be.room.dto.ConversationResponse;
 import fit.iuh.cnm_project_be.room.dto.ConversationStatusPayload;
-import fit.iuh.cnm_project_be.room.dto.ConversationBackgroundUploadResponse;
 import fit.iuh.cnm_project_be.room.dto.CreateConversationRequest;
 import fit.iuh.cnm_project_be.room.entity.Conversation;
 import fit.iuh.cnm_project_be.room.entity.ConversationMember;
 import fit.iuh.cnm_project_be.room.entity.ConversationUserSetting;
-import fit.iuh.cnm_project_be.room.enums.ConversationBackgroundType;
 import fit.iuh.cnm_project_be.room.enums.ConversationNotificationLevel;
 import fit.iuh.cnm_project_be.room.enums.ConversationType;
 import fit.iuh.cnm_project_be.room.enums.MemberRole;
@@ -26,14 +23,12 @@ import fit.iuh.cnm_project_be.room.repository.ConversationRepository;
 import fit.iuh.cnm_project_be.room.repository.ConversationUserSettingRepository;
 import fit.iuh.cnm_project_be.user.entity.UserProfile;
 import fit.iuh.cnm_project_be.user.repository.UserProfileRepository;
-import fit.iuh.cnm_project_be.storage.S3MediaStorageService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
-import org.springframework.web.multipart.MultipartFile;
 
 import java.time.Instant;
 import java.util.Comparator;
@@ -57,13 +52,10 @@ public class ConversationService {
     private final MessageRepository messageRepository;
     private final MessageUserStateRepository messageUserStateRepository;
     private final UserProfileRepository userProfileRepository;
-    private final S3MediaStorageService s3MediaStorageService;
     private final SimpMessagingTemplate messagingTemplate;
     private static final int MAX_CONVERSATION_NAME_LENGTH = 100;
     private static final int MAX_CONVERSATION_AVATAR_URL_LENGTH = 500;
     private static final int MAX_CUSTOM_CONVERSATION_NAME_LENGTH = 100;
-    private static final int MAX_BACKGROUND_COLOR_LENGTH = 32;
-    private static final int MAX_BACKGROUND_IMAGE_URL_LENGTH = 500;
 
     @Transactional(readOnly = true)
     public List<ConversationResponse> getMyConversations(UUID userId, boolean archived) {
@@ -113,10 +105,6 @@ public class ConversationService {
 
         conversation.setName(normalizedName);
         Conversation savedConversation = conversationRepository.save(conversation);
-        log.debug("[GROUP RENAME SYNC] conversationId={} actorUserId={} nextName={}",
-                conversationId,
-                actorUserId,
-                normalizedName);
         broadcastConversationUpdates(savedConversation.getId());
         ConversationResponse response = mapToResponse(savedConversation, actorUserId);
         logGroupLifecycleMembers("rename-group", response);
@@ -228,22 +216,8 @@ public class ConversationService {
         ensureOwner(actorMember);
 
         List<ConversationMember> members = conversationMemberRepository.findByConversationId(conversationId);
-        List<ConversationMember> removedMembers = members.stream()
-                .filter(member -> !member.getUserId().equals(actorUserId))
-                .toList();
-        log.info("[GROUP DISBAND] conversationId={} ownerId={} memberCount={}",
-                conversationId,
-                actorUserId,
-                members.size());
-        removedMembers.forEach(member -> {
-            log.info("[GROUP REMOVE MEMBERS] conversationId={} removedUserId={} role={}",
-                    conversationId,
-                    member.getUserId(),
-                    member.getRole());
-            conversationMemberRepository.deleteByConversationIdAndUserId(conversationId, member.getUserId());
-        });
         softDeleteConversation(conversation);
-        broadcastConversationDeleted(conversationId, members, true);
+        broadcastConversationDeleted(conversationId, members);
     }
 
     @Transactional
@@ -338,54 +312,12 @@ public class ConversationService {
     }
 
     @Transactional
-    public void updateBackground(
-            UUID conversationId,
-            UUID actorUserId,
-            ConversationBackgroundType backgroundType,
-            String backgroundColor,
-            String backgroundImageUrl) {
-        Conversation conversation = getConversationOrThrow(conversationId);
-        ensureConversationMember(conversationId, actorUserId);
-
-        ConversationBackgroundType normalizedType = normalizeBackgroundType(backgroundType);
-        String normalizedColor = normalizeBackgroundColor(backgroundColor, normalizedType);
-        String normalizedImageUrl = normalizeBackgroundImageUrl(backgroundImageUrl, normalizedType);
-
-        if (Objects.equals(resolveConversationBackgroundType(conversation), normalizedType)
-                && Objects.equals(conversation.getBackgroundColor(), normalizedColor)
-                && Objects.equals(conversation.getBackgroundImageUrl(), normalizedImageUrl)) {
-            return;
-        }
-
-        conversation.setBackgroundType(normalizedType == ConversationBackgroundType.DEFAULT ? null : normalizedType);
-        conversation.setBackgroundColor(normalizedColor);
-        conversation.setBackgroundImageUrl(normalizedImageUrl);
-        Conversation savedConversation = conversationRepository.save(conversation);
-        broadcastConversationUpdates(savedConversation.getId());
-    }
-
-    @Transactional
-    public ConversationBackgroundUploadResponse uploadBackgroundImage(UUID conversationId, UUID actorUserId, MultipartFile file) {
-        getConversationOrThrow(conversationId);
-        ensureConversationMember(conversationId, actorUserId);
-
-        UploadAttachmentResponse upload = s3MediaStorageService.upload(actorUserId, file);
-        return ConversationBackgroundUploadResponse.builder()
-                .url(upload.getUrl())
-                .storageKey(upload.getStorageKey())
-                .fileName(upload.getFileName())
-                .contentType(upload.getContentType())
-                .fileSize(upload.getFileSize())
-                .build();
-    }
-
-    @Transactional
     public ConversationResponse addMember(UUID conversationId, UUID actorUserId, UUID targetUserId) {
         Conversation conversation = getConversationOrThrow(conversationId);
         ConversationMember actorMember = getMemberOrThrow(conversationId, actorUserId);
 
         ensureGroupConversation(conversation);
-        ensureCanAddMembers(actorMember);
+        ensureCanManageMembers(actorMember);
         ensureUserExists(targetUserId);
 
         if (conversationMemberRepository.existsByConversationIdAndUserId(conversationId, targetUserId)) {
@@ -479,9 +411,6 @@ public class ConversationService {
                 .pinned(setting != null && setting.getPinnedAt() != null)
                 .notificationLevel(resolveNotificationLevel(setting))
                 .customName(setting != null ? setting.getCustomName() : null)
-                .backgroundType(resolveConversationBackgroundType(conv))
-                .backgroundColor(conv.getBackgroundColor())
-                .backgroundImageUrl(conv.getBackgroundImageUrl())
                 .displayName(displayName)
 
                 .peerUserId(privatePeerInfo.userId())
@@ -539,15 +468,8 @@ public class ConversationService {
                 throw new BusinessException("Private conversation must contain exactly two participants");
             }
         } else {
-            long selectedParticipantCount = participantIds.stream()
-                    .filter(participantId -> !participantId.equals(creatorId))
-                    .count();
-            log.debug("[GROUP VALIDATION] creatorId={} selectedParticipantCount={} participantCount={}",
-                    creatorId,
-                    selectedParticipantCount,
-                    participantIds.size());
-            if (selectedParticipantCount < 2) {
-                throw new BusinessException("Group conversation must contain at least two selected members");
+            if (participantIds.size() < 2) {
+                throw new BusinessException("Group conversation must contain at least two participants");
             }
             normalizeConversationName(request.getName());
         }
@@ -589,18 +511,13 @@ public class ConversationService {
             }
 
             ConversationResponse response = mapToResponse(conversation, member.getUserId(), setting);
-            log.debug("[GROUP RENAME SYNC] event=CONVERSATION_UPDATED conversationId={} recipientUserId={} displayName={} memberCount={}",
-                    conversationId,
-                    member.getUserId(),
-                    response.getDisplayName(),
-                    response.getMembers() != null ? response.getMembers().size() : 0);
             messagingTemplate.convertAndSend("/topic/users/" + member.getUserId() + "/conversations",
                     RealtimeEvent.of(RealtimeEventType.CONVERSATION_UPDATED, response));
         });
     }
 
-    private void broadcastConversationDeleted(UUID conversationId, List<ConversationMember> members, boolean isDisbanded) {
-        ConversationStatusPayload payload = new ConversationStatusPayload(conversationId, "DELETED", isDisbanded);
+    private void broadcastConversationDeleted(UUID conversationId, List<ConversationMember> members) {
+        ConversationStatusPayload payload = new ConversationStatusPayload(conversationId, "DELETED");
         members.forEach(
                 member -> messagingTemplate.convertAndSend("/topic/users/" + member.getUserId() + "/conversations",
                         RealtimeEvent.of(RealtimeEventType.CONVERSATION_UPDATED, payload)));
@@ -661,20 +578,8 @@ public class ConversationService {
     }
 
     private void ensureCanManageMembers(ConversationMember actorMember) {
-        log.debug("[GROUP ROLE CHECK] action=manage actorUserId={} actorRole={}",
-                actorMember.getUserId(),
-                actorMember.getRole());
         if (!isPrivilegedRole(actorMember.getRole())) {
             throw new ForbiddenException("Only owners or admins can manage members");
-        }
-    }
-
-    private void ensureCanAddMembers(ConversationMember actorMember) {
-        log.debug("[GROUP ROLE CHECK] action=add-member actorUserId={} actorRole={}",
-                actorMember.getUserId(),
-                actorMember.getRole());
-        if (actorMember.getRole() == null || actorMember.getRole() == MemberRole.GUEST) {
-            throw new ForbiddenException("Only conversation members can add members");
         }
     }
 
@@ -759,12 +664,9 @@ public class ConversationService {
                 .map(member -> mapConversationMember(member, profilesByUserId.get(member.getUserId())))
                 .toList();
 
-        log.debug("[GROUP MEMBER MAP] conversationId={} source=builder memberCount={} members={}",
+        log.debug("[BE GROUP RESPONSE MEMBERS] conversationId={} source=builder memberCount={}",
                 conversation.getId(),
-                memberResponses.size(),
-                memberResponses.stream()
-                        .map(member -> member.getUserId() + ":" + member.getRole())
-                        .toList());
+                memberResponses.size());
 
         return memberResponses;
     }
@@ -783,53 +685,6 @@ public class ConversationService {
         }
 
         return normalizedCustomName;
-    }
-
-    private ConversationBackgroundType normalizeBackgroundType(ConversationBackgroundType backgroundType) {
-        if (backgroundType == null) {
-            throw new BusinessException("Background type is required");
-        }
-        return backgroundType;
-    }
-
-    private ConversationBackgroundType resolveConversationBackgroundType(Conversation conversation) {
-        return conversation.getBackgroundType() != null
-                ? conversation.getBackgroundType()
-                : ConversationBackgroundType.DEFAULT;
-    }
-
-    private String normalizeBackgroundColor(String backgroundColor, ConversationBackgroundType backgroundType) {
-        if (backgroundType != ConversationBackgroundType.COLOR) {
-            return null;
-        }
-        if (backgroundColor == null) {
-            throw new BusinessException("Background color is required for color background");
-        }
-        String normalized = backgroundColor.trim();
-        if (normalized.isEmpty()) {
-            throw new BusinessException("Background color must not be blank");
-        }
-        if (normalized.length() > MAX_BACKGROUND_COLOR_LENGTH) {
-            throw new BusinessException("Background color must be less than 32 characters");
-        }
-        return normalized;
-    }
-
-    private String normalizeBackgroundImageUrl(String backgroundImageUrl, ConversationBackgroundType backgroundType) {
-        if (backgroundType != ConversationBackgroundType.IMAGE) {
-            return null;
-        }
-        if (backgroundImageUrl == null) {
-            throw new BusinessException("Background image URL is required for image background");
-        }
-        String normalized = backgroundImageUrl.trim();
-        if (normalized.isEmpty()) {
-            throw new BusinessException("Background image URL must not be blank");
-        }
-        if (normalized.length() > MAX_BACKGROUND_IMAGE_URL_LENGTH) {
-            throw new BusinessException("Background image URL must be less than 500 characters");
-        }
-        return normalized;
     }
 
     private String resolveDisplayName(

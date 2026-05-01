@@ -9,7 +9,7 @@ import org.springframework.web.bind.annotation.*;
 import java.util.UUID;
 
 @RestController
-@RequestMapping("/api/v1/ai/chat")
+@RequestMapping("/api/v1/test/chat")
 @RequiredArgsConstructor
 public class ChatController {
 
@@ -18,8 +18,7 @@ public class ChatController {
     private final ChatSummaryService summaryService;
 
     @PostMapping("")
-    public String chat(@RequestBody java.util.Map<String, String> payload) {
-        String message = payload.get("message");
+    public String chat(@RequestBody String message) {
         return aiService.ask(message);
     }
 
