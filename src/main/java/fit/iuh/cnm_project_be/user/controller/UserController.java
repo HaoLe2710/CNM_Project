@@ -2,11 +2,14 @@ package fit.iuh.cnm_project_be.user.controller;
 
 import fit.iuh.cnm_project_be.common.api.ApiResponse;
 import fit.iuh.cnm_project_be.user.dto.request.UpdateUserProfileRequest;
+import fit.iuh.cnm_project_be.user.dto.request.UpdateUserSettingsRequest;
 import fit.iuh.cnm_project_be.user.dto.response.UserProfileResponse;
 import fit.iuh.cnm_project_be.user.dto.response.UserSearchResponse;
+import fit.iuh.cnm_project_be.user.dto.response.UserSettingsResponse;
 import fit.iuh.cnm_project_be.user.entity.UserProfile;
 import fit.iuh.cnm_project_be.auth.service.AuthService;
 import fit.iuh.cnm_project_be.user.service.FriendService;
+import fit.iuh.cnm_project_be.user.service.UserSettingService;
 import fit.iuh.cnm_project_be.user.service.UserService;
 import jakarta.validation.Valid;
 import lombok.AccessLevel;
@@ -43,6 +46,7 @@ public class UserController {
     @Autowired
     AuthService authService;
     FriendService friendService;
+    UserSettingService userSettingService;
 
     @GetMapping("/profile")
     public ApiResponse<UserProfileResponse> getUserProfile() {
@@ -92,6 +96,21 @@ public class UserController {
     @GetMapping("/search")
     public ApiResponse<List<UserSearchResponse>> searchUsers(@RequestParam("q") String keyword) {
         return ApiResponse.ok(friendService.searchUsers(keyword), UUID.randomUUID().toString());
+    }
+
+    @GetMapping("/settings")
+    public ApiResponse<UserSettingsResponse> getUserSettings() {
+        return ApiResponse.ok(userSettingService.getMySettings(), UUID.randomUUID().toString());
+    }
+
+    @PatchMapping("/settings")
+    public ApiResponse<UserSettingsResponse> updateUserSettings(
+            @Valid @RequestBody UpdateUserSettingsRequest request
+    ) {
+        return ApiResponse.ok(
+                userSettingService.updateMySettings(request.getSettings()),
+                UUID.randomUUID().toString()
+        );
     }
 
     private UserProfileResponse toResponse(UserProfile profile) {

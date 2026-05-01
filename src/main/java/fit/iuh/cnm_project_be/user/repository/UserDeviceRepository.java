@@ -25,4 +25,6 @@ public interface UserDeviceRepository
     List<UserDevice> findByUserIdAndPlatformIn(UUID userId, Collection<Platform> platforms);
 
     void deleteByUserIdAndDeviceIdAndPlatform(UUID userId, String deviceId, Platform platform);
+
+    void deleteByUserId(UUID userId);
 }

@@ -7,6 +7,7 @@ import fit.iuh.cnm_project_be.message.dto.CursorPageResponse;
 import fit.iuh.cnm_project_be.message.dto.EditMessageRequest;
 import fit.iuh.cnm_project_be.message.dto.MessageAttachmentPayload;
 import fit.iuh.cnm_project_be.message.dto.MessageAttachmentResponse;
+import fit.iuh.cnm_project_be.message.dto.MessageContextResponse;
 import fit.iuh.cnm_project_be.message.dto.MessageDeletedPayload;
 import fit.iuh.cnm_project_be.message.dto.MessageReactionEventPayload;
 import fit.iuh.cnm_project_be.message.dto.MessageReactionRequest;
@@ -40,6 +41,7 @@ import fit.iuh.cnm_project_be.room.entity.ConversationMember;
 import fit.iuh.cnm_project_be.room.entity.ConversationUserSetting;
 import fit.iuh.cnm_project_be.room.enums.ConversationNotificationLevel;
 import fit.iuh.cnm_project_be.room.enums.ConversationType;
+import fit.iuh.cnm_project_be.room.enums.MemberRole;
 import fit.iuh.cnm_project_be.room.repository.ConversationMemberRepository;
 import fit.iuh.cnm_project_be.room.repository.ConversationRepository;
 import fit.iuh.cnm_project_be.room.repository.ConversationUserSettingRepository;
@@ -70,6 +72,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
 import java.util.regex.Matcher;
@@ -84,6 +87,7 @@ public class MessageService {
     private static final int DEFAULT_MESSAGE_PAGE_SIZE = 50;
     private static final int MAX_MESSAGE_PAGE_SIZE = 100;
     private static final Pattern MENTION_PATTERN = Pattern.compile("(?<![A-Za-z0-9._])@([A-Za-z0-9._]+)");
+    private static final Pattern ABSOLUTE_URL_PATTERN = Pattern.compile("^(?i)https?://\\S+$");
 
     private final MessageRepository messageRepository;
     private final MessageAttachmentRepository messageAttachmentRepository;
@@ -105,11 +109,14 @@ public class MessageService {
         Conversation conversation = getConversationOrThrow(request.getConversationId());
         ensureConversationMember(conversation.getId(), senderId);
         validatePayload(request);
+        String normalizedContent = normalizeNullableText(request.getContent());
+        String resolvedOriginalLinkUrl = resolveOriginalLinkUrl(normalizedContent, request.getOriginalLinkUrl());
 
         Message message = new Message();
         message.setConversationId(conversation.getId());
         message.setSenderId(senderId);
-        message.setContent(request.getContent());
+        message.setContent(normalizedContent);
+        message.setOriginalLinkUrl(resolvedOriginalLinkUrl);
         message.setMessageType(resolveMessageType(request));
         applyReplySnapshot(message, request);
         Message savedMessage = messageRepository.save(message);
@@ -157,6 +164,62 @@ public class MessageService {
                 .build();
     }
 
+    @Transactional(readOnly = true)
+    public MessageContextResponse getMessageContext(UUID conversationId, Long messageId, UUID currentUserId, int range) {
+        getConversationOrThrow(conversationId);
+        ensureConversationMember(conversationId, currentUserId);
+
+        int normalizedRange = normalizeContextRange(range);
+        int sideWindow = Math.max(1, normalizedRange / 2);
+
+        Message anchorMessage = getVisibleMessageForUserOrThrow(messageId, currentUserId);
+        if (!anchorMessage.getConversationId().equals(conversationId)) {
+            throw new BusinessException("Message does not belong to the requested conversation");
+        }
+
+        List<Message> olderMessages = messageRepository.findVisibleMessagesOlderThanAnchor(
+                conversationId,
+                currentUserId,
+                anchorMessage.getCreatedAt(),
+                anchorMessage.getId(),
+                PageRequest.of(0, sideWindow + 1)
+        );
+        boolean hasOlder = olderMessages.size() > sideWindow;
+        if (hasOlder) {
+            olderMessages = new ArrayList<>(olderMessages.subList(0, sideWindow));
+        }
+        Collections.reverse(olderMessages);
+
+        List<Message> newerMessages = messageRepository.findVisibleMessagesNewerThanAnchor(
+                conversationId,
+                currentUserId,
+                anchorMessage.getCreatedAt(),
+                anchorMessage.getId(),
+                PageRequest.of(0, sideWindow + 1)
+        );
+        boolean hasNewer = newerMessages.size() > sideWindow;
+        if (hasNewer) {
+            newerMessages = new ArrayList<>(newerMessages.subList(0, sideWindow));
+        }
+
+        List<Message> contextMessages = new ArrayList<>(olderMessages.size() + 1 + newerMessages.size());
+        contextMessages.addAll(olderMessages);
+        contextMessages.add(anchorMessage);
+        contextMessages.addAll(newerMessages);
+
+        List<MessageResponse> items = mapToResponses(contextMessages, currentUserId);
+        Message latestVisibleMessage = resolveLatestVisibleMessage(conversationId, currentUserId);
+
+        return MessageContextResponse.builder()
+                .anchorMessageId(anchorMessage.getId())
+                .items(items)
+                .hasOlder(hasOlder)
+                .hasNewer(hasNewer)
+                .latestMessageId(latestVisibleMessage != null ? latestVisibleMessage.getId() : null)
+                .latestCursor(latestVisibleMessage != null ? encodeCursor(latestVisibleMessage) : null)
+                .build();
+    }
+
     @Transactional
     public MessageResponse editMessage(Long messageId, UUID actorId, EditMessageRequest request) {
         Message message = messageRepository.findById(messageId)
@@ -173,14 +236,39 @@ public class MessageService {
             throw new BusinessException("Only text messages can be edited");
         }
 
-        String updatedContent = validateEditedContent(request, message.getContent());
+        String updatedContent = validateEditedContent(request, message.getContent(), message.getOriginalLinkUrl());
+        String resolvedOriginalLinkUrl = resolveOriginalLinkUrl(updatedContent, request.getOriginalLinkUrl());
         message.setContent(updatedContent);
+        message.setOriginalLinkUrl(resolvedOriginalLinkUrl);
         message.setEditedAt(Instant.now());
         Message savedMessage = messageRepository.save(message);
 
         List<MessageAttachment> attachments = messageAttachmentRepository.findByMessageIdIn(List.of(savedMessage.getId()));
         List<MessageReaction> reactions = messageReactionRepository.findByMessageIdIn(List.of(savedMessage.getId()));
         MessageResponse response = mapToResponse(savedMessage, actorId, attachments, reactions);
+
+        messagingTemplate.convertAndSend("/topic/conversations/" + savedMessage.getConversationId(),
+                RealtimeEvent.of(RealtimeEventType.MESSAGE_UPDATED, response));
+
+        return response;
+    }
+
+    @Transactional
+    public MessageResponse updatePinState(Long messageId, UUID actorId, boolean pinned) {
+        Message message = getVisibleMessageOrThrow(messageId);
+        Conversation conversation = getConversationOrThrow(message.getConversationId());
+        ConversationMember actorMember = getConversationMemberOrThrow(conversation.getId(), actorId);
+
+        ensureCanPinMessages(conversation, actorMember);
+
+        message.setPinnedAt(pinned ? Instant.now() : null);
+        Message savedMessage = messageRepository.save(message);
+
+        List<MessageAttachment> attachments = messageAttachmentRepository.findByMessageIdIn(List.of(savedMessage.getId()));
+        List<MessageReaction> reactions = messageReactionRepository.findByMessageIdIn(List.of(savedMessage.getId()));
+        MessageUserState actorState = messageUserStateRepository.findByMessageIdAndUserId(savedMessage.getId(), actorId)
+                .orElse(null);
+        MessageResponse response = mapToResponse(savedMessage, actorId, attachments, reactions, actorState);
 
         messagingTemplate.convertAndSend("/topic/conversations/" + savedMessage.getConversationId(),
                 RealtimeEvent.of(RealtimeEventType.MESSAGE_UPDATED, response));
@@ -310,7 +398,7 @@ public class MessageService {
 
         messagingTemplate.convertAndSend("/topic/users/" + userId + "/conversations/status",
                 RealtimeEvent.of(RealtimeEventType.CONVERSATION_UPDATED,
-                        new ConversationStatusPayload(conversationId, "SEEN")));
+                        new ConversationStatusPayload(conversationId, "SEEN", null)));
         broadcastConversationUpdates(conversationId);
     }
 
@@ -475,6 +563,7 @@ public class MessageService {
                 .senderDisplayName(senderDisplayName)
                 .senderAvatarUrl(senderAvatarUrl)
                 .content(message.getContent())
+                .originalLinkUrl(resolveOriginalLinkUrl(message.getContent(), message.getOriginalLinkUrl()))
                 .type(message.getMessageType())
                 .replyTo(buildReplyInfo(message, profilesByUserId, replyMessagesByReplyToId))
                 .attachments(attachmentResponses)
@@ -483,6 +572,7 @@ public class MessageService {
                 .seen(resolveSeen(state))
                 .createdAt(message.getCreatedAt())
                 .editedAt(message.getEditedAt())
+                .pinnedAt(message.getPinnedAt())
                 .build();
     }
 
@@ -591,22 +681,29 @@ public class MessageService {
     private void validatePayload(SendMessageRequest request) {
         boolean hasContent = request.getContent() != null && !request.getContent().isBlank();
         boolean hasAttachments = request.getAttachments() != null && !request.getAttachments().isEmpty();
+        boolean hasOriginalLinkUrl = request.getOriginalLinkUrl() != null && !request.getOriginalLinkUrl().isBlank();
 
-        if (!hasContent && !hasAttachments) {
-            throw new BusinessException("Message must contain text or attachments");
+        if (!hasContent && !hasAttachments && !hasOriginalLinkUrl) {
+            throw new BusinessException("Message must contain text, original link, or attachments");
         }
     }
 
-    private String validateEditedContent(EditMessageRequest request, String existingContent) {
-        if (request == null || request.getContent() == null) {
+    private String validateEditedContent(EditMessageRequest request, String existingContent, String existingOriginalLinkUrl) {
+        if (request == null) {
             throw new BusinessException("Message content is required");
         }
 
-        String trimmedContent = request.getContent().trim();
-        if (trimmedContent.isEmpty()) {
-            throw new BusinessException("Message content must not be blank");
+        String trimmedContent = request.getContent() == null ? null : request.getContent().trim();
+        String trimmedOriginalLinkUrl = normalizeLinkUrl(request.getOriginalLinkUrl());
+
+        if ((trimmedContent == null || trimmedContent.isEmpty())
+                && (trimmedOriginalLinkUrl == null || trimmedOriginalLinkUrl.isBlank())) {
+            throw new BusinessException("Message content or original link is required");
         }
-        if (trimmedContent.equals(existingContent == null ? null : existingContent.trim())) {
+
+        String normalizedExistingContent = existingContent == null ? null : existingContent.trim();
+        if (Objects.equals(trimmedContent, normalizedExistingContent)
+                && Objects.equals(trimmedOriginalLinkUrl, normalizeLinkUrl(existingOriginalLinkUrl))) {
             throw new BusinessException("Message content must be different from the current content");
         }
 
@@ -638,15 +735,19 @@ public class MessageService {
         message.setReplyToMessageId(repliedMessage.getId());
         message.setReplyToSenderId(repliedMessage.getSenderId());
         message.setReplyToType(repliedMessage.getMessageType());
-        message.setReplyToContentPreview(buildContentPreview(repliedMessage.getContent()));
+        message.setReplyToContentPreview(buildContentPreview(repliedMessage.getContent(), repliedMessage.getOriginalLinkUrl()));
     }
 
-    private String buildContentPreview(String content) {
-        if (content == null || content.isBlank()) {
+    private String buildContentPreview(String content, String originalLinkUrl) {
+        String source = content;
+        if (source == null || source.isBlank()) {
+            source = originalLinkUrl;
+        }
+        if (source == null || source.isBlank()) {
             return "";
         }
 
-        String trimmed = content.trim();
+        String trimmed = source.trim();
         return trimmed.length() <= 80 ? trimmed : trimmed.substring(0, 77) + "...";
     }
 
@@ -695,8 +796,20 @@ public class MessageService {
     }
 
     private void ensureConversationMember(UUID conversationId, UUID userId) {
-        if (!conversationMemberRepository.existsByConversationIdAndUserId(conversationId, userId)) {
-            throw new ForbiddenException("User does not belong to this conversation");
+        getConversationMemberOrThrow(conversationId, userId);
+    }
+
+    private ConversationMember getConversationMemberOrThrow(UUID conversationId, UUID userId) {
+        return conversationMemberRepository.findByConversationIdAndUserId(conversationId, userId)
+                .orElseThrow(() -> new ForbiddenException("User does not belong to this conversation"));
+    }
+
+    private void ensureCanPinMessages(Conversation conversation, ConversationMember actorMember) {
+        if (conversation.getType() != ConversationType.GROUP) {
+            return;
+        }
+        if (actorMember.getRole() != MemberRole.OWNER && actorMember.getRole() != MemberRole.ADMIN) {
+            throw new ForbiddenException("Only owners or admins can pin group messages");
         }
     }
 
@@ -709,6 +822,15 @@ public class MessageService {
     private Message getVisibleMessageOrThrow(Long messageId) {
         return messageRepository.findByIdAndDeletedAtIsNull(messageId)
                 .orElseThrow(() -> new NotFoundException("Message not found"));
+    }
+
+    private Message getVisibleMessageForUserOrThrow(Long messageId, UUID userId) {
+        Message message = getVisibleMessageOrThrow(messageId);
+        MessageUserState state = messageUserStateRepository.findByMessageIdAndUserId(messageId, userId).orElse(null);
+        if (state != null && (state.getHiddenAt() != null || state.getDeletedForMeAt() != null)) {
+            throw new NotFoundException("Message not found");
+        }
+        return message;
     }
 
     private void broadcastConversationUpdates(UUID conversationId) {
@@ -925,6 +1047,11 @@ public class MessageService {
         );
     }
 
+    private Message resolveLatestVisibleMessage(UUID conversationId, UUID userId) {
+        List<Message> latestMessages = messageRepository.findVisibleMessages(conversationId, userId, PageRequest.of(0, 1));
+        return latestMessages.isEmpty() ? null : latestMessages.get(0);
+    }
+
     private String encodeCursor(Message message) {
         String raw = message.getCreatedAt().toEpochMilli() + ":" + message.getId();
         return Base64.getUrlEncoder()
@@ -1010,5 +1137,37 @@ public class MessageService {
 
         String normalizedValue = value.trim();
         return normalizedValue.isEmpty() ? null : normalizedValue;
+    }
+
+    private String normalizeLinkUrl(String value) {
+        String normalizedValue = normalizeNullableText(value);
+        if (normalizedValue == null) {
+            return null;
+        }
+        if (normalizedValue.length() > 2000) {
+            throw new BusinessException("Original link URL must be less than 2000 characters");
+        }
+        return normalizedValue;
+    }
+
+    private int normalizeContextRange(int range) {
+        if (range <= 0) {
+            return DEFAULT_MESSAGE_PAGE_SIZE;
+        }
+        return Math.min(range, MAX_MESSAGE_PAGE_SIZE);
+    }
+
+    private String resolveOriginalLinkUrl(String content, String originalLinkUrl) {
+        String normalizedOriginalLinkUrl = normalizeLinkUrl(originalLinkUrl);
+        if (normalizedOriginalLinkUrl != null) {
+            return normalizedOriginalLinkUrl;
+        }
+
+        String normalizedContent = normalizeNullableText(content);
+        if (normalizedContent != null && ABSOLUTE_URL_PATTERN.matcher(normalizedContent).matches()) {
+            return normalizeLinkUrl(normalizedContent);
+        }
+
+        return null;
     }
 }

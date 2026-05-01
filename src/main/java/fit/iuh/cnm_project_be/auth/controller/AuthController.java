@@ -2,6 +2,7 @@
 package fit.iuh.cnm_project_be.auth.controller;
 
 import fit.iuh.cnm_project_be.auth.dto.request.ConfirmPasswordChangeRequest;
+import fit.iuh.cnm_project_be.auth.dto.request.CheckEmailRequest;
 import fit.iuh.cnm_project_be.auth.dto.request.DeviceLoginApprovalRequest;
 import fit.iuh.cnm_project_be.auth.dto.request.DeviceLoginRequest;
 import fit.iuh.cnm_project_be.auth.dto.request.ForgotPasswordResetRequest;
@@ -14,6 +15,7 @@ import fit.iuh.cnm_project_be.auth.dto.request.VerifyCurrentPasswordRequest;
 import fit.iuh.cnm_project_be.auth.dto.request.VerifyOtpRequest;
 import fit.iuh.cnm_project_be.auth.dto.request.LogoutDeviceRequest;
 import fit.iuh.cnm_project_be.auth.dto.response.ForgotPasswordVerifyOtpResponse;
+import fit.iuh.cnm_project_be.auth.dto.response.CheckEmailResponse;
 import fit.iuh.cnm_project_be.auth.dto.response.DeviceLoginQrResponse;
 import fit.iuh.cnm_project_be.auth.dto.response.DeviceLoginStatusResponse;
 import fit.iuh.cnm_project_be.auth.dto.response.LoginResponse;
@@ -89,6 +91,11 @@ public class AuthController {
 
         String requestId = UUID.randomUUID().toString();
         return ApiResponse.ok(authService.register(registerRequest), requestId);
+    }
+
+    @PostMapping("/check-email")
+    public ApiResponse<CheckEmailResponse> checkEmail(@RequestBody @Valid CheckEmailRequest request) {
+        return ApiResponse.ok(authService.checkEmail(request.getEmail()), UUID.randomUUID().toString());
     }
 
     @GetMapping("/check-existence")

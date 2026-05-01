@@ -19,6 +19,7 @@ public class MessageResponse {
     private String senderDisplayName;
     private String senderAvatarUrl;
     private String content;
+    private String originalLinkUrl;
     private MessageType type;
     private ReplyInfo replyTo;
     private List<MessageAttachmentResponse> attachments;
@@ -27,4 +28,5 @@ public class MessageResponse {
     private Boolean seen;
     private Instant createdAt;
     private Instant editedAt;
+    private Instant pinnedAt;
 }

@@ -55,6 +55,52 @@ public interface MessageRepository extends SoftDeleteRepository<Message, Long> {
                         @Param("cursorMessageId") Long cursorMessageId,
                         Pageable pageable);
 
+        @Query("""
+                        select m from Message m
+                        where m.conversationId = :conversationId
+                          and m.deletedAt is null
+                          and not exists (
+                                select 1 from MessageUserState state
+                                where state.messageId = m.id
+                                  and state.userId = :userId
+                                  and (state.hiddenAt is not null or state.deletedForMeAt is not null)
+                          )
+                          and (
+                                m.createdAt < :anchorCreatedAt
+                                or (m.createdAt = :anchorCreatedAt and m.id < :anchorMessageId)
+                          )
+                        order by m.createdAt desc, m.id desc
+                        """)
+        List<Message> findVisibleMessagesOlderThanAnchor(
+                        @Param("conversationId") UUID conversationId,
+                        @Param("userId") UUID userId,
+                        @Param("anchorCreatedAt") java.time.Instant anchorCreatedAt,
+                        @Param("anchorMessageId") Long anchorMessageId,
+                        Pageable pageable);
+
+        @Query("""
+                        select m from Message m
+                        where m.conversationId = :conversationId
+                          and m.deletedAt is null
+                          and not exists (
+                                select 1 from MessageUserState state
+                                where state.messageId = m.id
+                                  and state.userId = :userId
+                                  and (state.hiddenAt is not null or state.deletedForMeAt is not null)
+                          )
+                          and (
+                                m.createdAt > :anchorCreatedAt
+                                or (m.createdAt = :anchorCreatedAt and m.id > :anchorMessageId)
+                          )
+                        order by m.createdAt asc, m.id asc
+                        """)
+        List<Message> findVisibleMessagesNewerThanAnchor(
+                        @Param("conversationId") UUID conversationId,
+                        @Param("userId") UUID userId,
+                        @Param("anchorCreatedAt") java.time.Instant anchorCreatedAt,
+                        @Param("anchorMessageId") Long anchorMessageId,
+                        Pageable pageable);
+
         List<Message> findTop50ByConversationIdAndDeletedAtIsNullOrderByCreatedAtDesc(UUID conversationId);
 
         List<Message> findByConversationIdAndDeletedAtIsNullOrderByCreatedAtAsc(UUID conversationId);
