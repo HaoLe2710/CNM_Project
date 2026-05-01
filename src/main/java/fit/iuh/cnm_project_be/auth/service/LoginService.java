@@ -17,6 +17,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Duration;
+import java.util.Locale;
 
 @Service
 @FieldDefaults(level = AccessLevel.PRIVATE, makeFinal = true)
@@ -35,9 +36,9 @@ public class LoginService {
 
         @Transactional
         public LoginResponse login(LoginRequest request, HttpServletResponse response) {
-                String username = request.getUsername().trim();
+                String username = normalizeIdentifier(request.getUsername());
 
-                Account account = accountRepository.findByEmailOrPhone(username, username)
+                Account account = accountRepository.findByEmailOrPhoneAndDeletedAtIsNull(username, username)
                                 .orElseThrow(() -> new UnauthorizedException("Account does not exist"));
 
                 if (!passwordEncoder.matches(request.getPassword(), account.getPassword())) {
@@ -86,5 +87,13 @@ public class LoginService {
                                 .deviceName(request.getDeviceName())
                                 .platform(request.getPlatform().name())
                                 .build();
+        }
+
+        private String normalizeIdentifier(String identifier) {
+                String trimmedValue = identifier == null ? "" : identifier.trim();
+                if (trimmedValue.contains("@")) {
+                        return trimmedValue.toLowerCase(Locale.ROOT);
+                }
+                return trimmedValue;
         }
 }

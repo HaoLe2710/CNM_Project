@@ -13,11 +13,15 @@ public interface AccountRepository extends BaseRepository<Account, UUID> {
     Optional<Account> findByEmail(String email);
 
     Optional<Account> findByEmailOrPhone(String email, String phone);
+    Optional<Account> findByEmailOrPhoneAndDeletedAtIsNull(String email, String phone);
     Optional<Account> findByUserIdAndDeletedAtIsNull(UUID userId);
 
     boolean existsByPhone(String phone);
+    boolean existsByPhoneAndDeletedAtIsNull(String phone);
 
     boolean existsByEmail(String email);
+    boolean existsByEmailAndDeletedAtIsNull(String email);
 
     boolean existsByEmailOrPhone(String email, String phone);
+    boolean existsByEmailOrPhoneAndDeletedAtIsNull(String email, String phone);
 }

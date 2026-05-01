@@ -160,7 +160,7 @@ public class PasswordService {
         log.info("[ForgotPassword] - Processing OTP request for: {}", normalizedIdentifier);
 
         // 1. Kiểm tra email/phone có tồn tại không
-        Account account = accountRepository.findByEmailOrPhone(normalizedIdentifier, normalizedIdentifier)
+        Account account = accountRepository.findByEmailOrPhoneAndDeletedAtIsNull(normalizedIdentifier, normalizedIdentifier)
                 .orElseThrow(() -> {
                     log.warn("[ForgotPassword] - Identifier {} not found in system", normalizedIdentifier);
                     return new BusinessException("Email or phone not found in system");
@@ -224,7 +224,7 @@ public class PasswordService {
         }
 
         // 2. Lấy Account
-        Account account = accountRepository.findByEmailOrPhone(normalizedIdentifier, normalizedIdentifier)
+        Account account = accountRepository.findByEmailOrPhoneAndDeletedAtIsNull(normalizedIdentifier, normalizedIdentifier)
                 .orElseThrow(() -> {
                     log.warn("[ForgotPassword] - Account not found for: {}", normalizedIdentifier);
                     return new NotFoundException("Account not found");

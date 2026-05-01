@@ -4,6 +4,7 @@ import fit.iuh.cnm_project_be.auth.dto.request.LoginRequest;
 import fit.iuh.cnm_project_be.auth.dto.request.RegisterRequest;
 import fit.iuh.cnm_project_be.auth.dto.request.DeviceLoginApprovalRequest;
 import fit.iuh.cnm_project_be.auth.dto.request.DeviceLoginRequest;
+import fit.iuh.cnm_project_be.auth.dto.response.CheckEmailResponse;
 import fit.iuh.cnm_project_be.auth.dto.response.DeviceLoginQrResponse;
 import fit.iuh.cnm_project_be.auth.dto.response.DeviceLoginStatusResponse;
 import fit.iuh.cnm_project_be.auth.dto.response.LoginResponse;
@@ -22,6 +23,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
+import java.util.Locale;
 import java.util.UUID;
 import java.util.stream.Collectors;
 
@@ -87,6 +89,20 @@ public class AuthService {
      */
     public RegisterResponse register(RegisterRequest request) {
         return registrationService.register(request);
+    }
+
+    public CheckEmailResponse checkEmail(String email) {
+        String normalizedEmail = email == null ? "" : email.trim().toLowerCase(Locale.ROOT);
+        boolean existed = accountService.checkEmailExists(normalizedEmail);
+
+        return CheckEmailResponse.builder()
+                .email(normalizedEmail)
+                .exists(existed)
+                .nextStep(existed ? "LOGIN" : "REGISTER")
+                .message(existed
+                        ? "Email already exists. Please continue to login."
+                        : "Email is available. Please continue with registration and email verification.")
+                .build();
     }
 
     /**
