@@ -16,8 +16,6 @@ public class SendMessageRequest {
 
     private String content;
 
-    private String originalLinkUrl;
-
     private Long replyToMessageId;
 
     private MessageType messageType;

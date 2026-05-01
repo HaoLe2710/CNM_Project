@@ -12,7 +12,6 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.util.Locale;
 import java.util.UUID;
 
 /**
@@ -38,20 +37,9 @@ public class AccountService {
             throw new BusinessException("Identifier cannot be empty");
         }
 
-        String value = normalizeIdentifier(identifier);
-        boolean existed = accountRepository.existsByEmailOrPhoneAndDeletedAtIsNull(value, value);
+        String value = identifier.trim();
+        boolean existed = accountRepository.existsByEmailOrPhone(value, value);
         log.debug("[Account] - Existence check for identifier: {}, result: {}", identifier, existed);
-        return existed;
-    }
-
-    public boolean checkEmailExists(String email) {
-        if (email == null || email.isBlank()) {
-            throw new BusinessException("Email cannot be empty");
-        }
-
-        String normalizedEmail = normalizeEmail(email);
-        boolean existed = accountRepository.existsByEmailAndDeletedAtIsNull(normalizedEmail);
-        log.debug("[Account] - Email existence check for email: {}, result: {}", normalizedEmail, existed);
         return existed;
     }
 
@@ -82,17 +70,5 @@ public class AccountService {
             log.error("[Account] - Delete operation failed for userId {}: {}", userId, ex.getMessage());
             throw new BusinessException("Failed to delete user and account");
         }
-    }
-
-    private String normalizeIdentifier(String identifier) {
-        String trimmedValue = identifier.trim();
-        if (trimmedValue.contains("@")) {
-            return normalizeEmail(trimmedValue);
-        }
-        return trimmedValue;
-    }
-
-    private String normalizeEmail(String email) {
-        return email.trim().toLowerCase(Locale.ROOT);
     }
 }

@@ -192,8 +192,7 @@ public class DeviceLoginService {
         String accessToken = jwtUtils.generateToken(account, session.getDeviceId(), platformValue);
         String refreshToken = jwtUtils.generateRefreshToken();
 
-        tokenRedisService.deleteRefreshTokensByScope(account.getUserId(), platformValue);
-        tokenRedisService.saveRefreshToken(account.getUserId(), platformValue, session.getDeviceId(), refreshToken);
+        tokenRedisService.saveRefreshToken(account.getUserId(), platformValue, refreshToken);
         tokenCookieService.setTokenToCookie(
                 response,
                 "accessToken",
@@ -223,11 +222,6 @@ public class DeviceLoginService {
                     userId,
                     deviceToRemove.getDeviceId(),
                     deviceToRemove.getPlatform().name()
-            );
-            tokenRedisService.deleteRefreshTokensByScope(
-                    userId,
-                    deviceToRemove.getPlatform().name().toLowerCase(),
-                    deviceToRemove.getDeviceId()
             );
             publishDeviceLogout(userId, deviceToRemove);
             devices = sortDevices(userDeviceService.getUserDeviceByUserId(userId));

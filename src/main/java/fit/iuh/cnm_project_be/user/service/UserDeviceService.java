@@ -66,14 +66,6 @@ public class UserDeviceService {
         }
     }
 
-    @Transactional
-    public void deleteAllDevices(UUID userId) {
-        if (userId == null) {
-            return;
-        }
-        userDeviceRepository.deleteByUserId(userId);
-    }
-
     private UserDevice updateDevice(
             UserDevice device,
             String deviceId,

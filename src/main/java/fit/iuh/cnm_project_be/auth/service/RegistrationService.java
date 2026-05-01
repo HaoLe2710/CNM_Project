@@ -42,12 +42,12 @@ public class RegistrationService {
         String phone = request.getPhone().trim();
 
         // 1. Validate email không đã tồn tại
-        if (accountRepository.existsByEmailAndDeletedAtIsNull(email)) {
+        if (accountRepository.existsByEmail(email)) {
             throw new BusinessException("Email already registered");
         }
 
         // 2. Validate phone number không đã tồn tại
-        if (accountRepository.existsByPhoneAndDeletedAtIsNull(phone)) {
+        if (accountRepository.existsByPhone(phone)) {
             throw new BusinessException("Phone already registered");
         }
 

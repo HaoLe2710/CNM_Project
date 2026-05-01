@@ -6,6 +6,4 @@ import lombok.Data;
 public class EditMessageRequest {
 
     private String content;
-
-    private String originalLinkUrl;
 }
