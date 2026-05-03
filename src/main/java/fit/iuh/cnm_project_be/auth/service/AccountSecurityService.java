@@ -93,27 +93,27 @@ public class AccountSecurityService {
         boolean requireDeviceApprovalEnabled = readBoolean(accountSecurity.get("requireDeviceApproval"));
         boolean zaloLockEnabled = zaloLock.isEnabled();
 
-        checks.add(check("email-linked", "Email da lien ket", hasEmail,
-                hasEmail ? "Email hien tai: " + profile.getEmail() : "Chua co email lien ket"));
-        checks.add(check("phone-linked", "So dien thoai da lien ket", hasPhone,
-                hasPhone ? "So dien thoai hien tai: " + profile.getPhone() : "Chua co so dien thoai lien ket"));
-        checks.add(check("two-factor", "Bao mat 2 lop", twoFactorEnabled,
-                twoFactorEnabled ? "Dang bat" : "Dang tat"));
-        checks.add(check("login-alerts", "Canh bao dang nhap", loginAlertsEnabled,
-                loginAlertsEnabled ? "Dang bat" : "Dang tat"));
-        checks.add(check("device-approval", "Phe duyet dang nhap web", requireDeviceApprovalEnabled,
-                requireDeviceApprovalEnabled ? "Dang bat" : "Dang tat"));
-        checks.add(check("zalo-lock", "Khoa Zalo", zaloLockEnabled,
-                zaloLockEnabled ? "Dang bat bang " + zaloLock.getMethod() : "Dang tat"));
+        checks.add(check("email-linked", "Email đã liên kết", hasEmail,
+                hasEmail ? "Email hiện tại: " + profile.getEmail() : "Chưa có email liên kết"));
+        checks.add(check("phone-linked", "Số điện thoại đã liên kết", hasPhone,
+                hasPhone ? "Số điện thoại hiện tại: " + profile.getPhone() : "Chưa có số điện thoại liên kết"));
+        checks.add(check("two-factor", "Bảo mật 2 lớp", twoFactorEnabled,
+                twoFactorEnabled ? "Đang bật" : "Đang tắt"));
+        checks.add(check("login-alerts", "Cảnh báo đăng nhập", loginAlertsEnabled,
+                loginAlertsEnabled ? "Đang bật" : "Đang tắt"));
+        checks.add(check("device-approval", "Phê duyệt đăng nhập web", requireDeviceApprovalEnabled,
+                requireDeviceApprovalEnabled ? "Đang bật" : "Đang tắt"));
+        checks.add(check("zalo-lock", "Khóa Zalo", zaloLockEnabled,
+                zaloLockEnabled ? "Đang bật bằng " + humanizeLockMethod(zaloLock.getMethod()) : "Đang tắt"));
 
         if (!hasEmail) {
             issues.add(issue(
                     "MISSING_EMAIL",
                     "MEDIUM",
-                    "Email chua duoc cap nhat",
-                    "Tai khoan chua co email de nhan OTP va canh bao dang nhap.",
+                    "Email chưa được cập nhật",
+                    "Tài khoản chưa có email để nhận OTP và cảnh báo đăng nhập.",
                     "UPDATE_EMAIL",
-                    "Cap nhat email"
+                    "Cập nhật email"
             ));
         }
 
@@ -121,10 +121,10 @@ public class AccountSecurityService {
             issues.add(issue(
                     "MISSING_PHONE",
                     "LOW",
-                    "So dien thoai chua duoc cap nhat",
-                    "Bo sung so dien thoai de khoi phuc tai khoan nhanh hon.",
+                    "Số điện thoại chưa được cập nhật",
+                    "Bổ sung số điện thoại để khôi phục tài khoản nhanh hơn.",
                     "UPDATE_PHONE",
-                    "Cap nhat so dien thoai"
+                    "Cập nhật số điện thoại"
             ));
         }
 
@@ -132,10 +132,10 @@ public class AccountSecurityService {
             issues.add(issue(
                     "TWO_FACTOR_DISABLED",
                     "HIGH",
-                    "Bao mat 2 lop dang tat",
-                    "Bat bao mat 2 lop de giam rui ro mat tai khoan.",
+                    "Bảo mật 2 lớp đang tắt",
+                    "Bật bảo mật 2 lớp để giảm rủi ro mất tài khoản.",
                     "ENABLE_TWO_FACTOR",
-                    "Bat bao mat 2 lop"
+                    "Bật bảo mật 2 lớp"
             ));
         }
 
@@ -143,10 +143,10 @@ public class AccountSecurityService {
             issues.add(issue(
                     "ZALO_LOCK_DISABLED",
                     "MEDIUM",
-                    "Khoa Zalo dang tat",
-                    "Bat khoa ung dung de bao ve noi dung chat khi roi may.",
+                    "Khóa Zalo đang tắt",
+                    "Bật khóa ứng dụng để bảo vệ nội dung chat khi rời máy.",
                     "ENABLE_ZALO_LOCK",
-                    "Bat Khoa Zalo"
+                    "Bật Khóa Zalo"
             ));
         }
 
@@ -154,10 +154,10 @@ public class AccountSecurityService {
             issues.add(issue(
                     "LOGIN_ALERTS_DISABLED",
                     "LOW",
-                    "Canh bao dang nhap dang tat",
-                    "Nen bat canh bao dang nhap de phat hien thiet bi la som hon.",
+                    "Cảnh báo đăng nhập đang tắt",
+                    "Nên bật cảnh báo đăng nhập để phát hiện thiết bị lạ sớm hơn.",
                     "ENABLE_LOGIN_ALERTS",
-                    "Bat canh bao dang nhap"
+                    "Bật cảnh báo đăng nhập"
             ));
         }
 
@@ -165,10 +165,10 @@ public class AccountSecurityService {
             issues.add(issue(
                     "DEVICE_APPROVAL_DISABLED",
                     "MEDIUM",
-                    "Phe duyet thiet bi dang tat",
-                    "Nen yeu cau phe duyet thiet bi moi de han che dang nhap trai phep.",
+                    "Phê duyệt thiết bị đang tắt",
+                    "Nên yêu cầu phê duyệt thiết bị mới để hạn chế đăng nhập trái phép.",
                     "ENABLE_DEVICE_APPROVAL",
-                    "Bat phe duyet thiet bi"
+                    "Bật phê duyệt thiết bị"
             ));
         }
 
@@ -206,7 +206,7 @@ public class AccountSecurityService {
             payload.put("pinHash", null);
             ZaloLockSettingsResponse response = toZaloLockResponse(userSettingService.updateMySection(ZALO_LOCK_SECTION, payload));
             securityAuditService.log(userService.getCurrentUserId(), "ACCOUNT_SECURITY_ZALO_LOCK_UPDATED",
-                    "Da cap nhat Khoa Zalo", "Khoa Zalo da duoc tat", null, null);
+                    "Đã cập nhật Khóa Zalo", "Khóa Zalo đã được tắt", null, null);
             return response;
         }
 
@@ -225,7 +225,7 @@ public class AccountSecurityService {
         payload.put("biometricEnabled", biometricEnabled);
         ZaloLockSettingsResponse response = toZaloLockResponse(userSettingService.updateMySection(ZALO_LOCK_SECTION, payload));
         securityAuditService.log(userService.getCurrentUserId(), "ACCOUNT_SECURITY_ZALO_LOCK_UPDATED",
-                "Da cap nhat Khoa Zalo", "Khoa Zalo da duoc bat bang " + method, null, null);
+                "Đã cập nhật Khóa Zalo", "Khóa Zalo đã được bật bằng " + humanizeLockMethod(method), null, null);
         return response;
     }
 
@@ -304,7 +304,7 @@ public class AccountSecurityService {
     public UserQrCodeResponse refreshMyQrCode() {
         UserQrCodeResponse response = getMyQrCode();
         securityAuditService.log(userService.getCurrentUserId(), "ACCOUNT_SECURITY_QR_REFRESHED",
-                "Da lam moi QR cua toi", "Nguoi dung da tao ma QR moi cho trang account security", null, null);
+                "Đã làm mới QR của tôi", "Người dùng đã tạo mã QR mới cho trang bảo mật tài khoản", null, null);
         return response;
     }
 
@@ -315,12 +315,12 @@ public class AccountSecurityService {
 
         otpService.sendOtp(newEmail, CONTACT_OTP_EXPIRY_MINUTES, OtpType.CHANGE_EMAIL);
         securityAuditService.log(profile.getUserId(), "ACCOUNT_SECURITY_CHANGE_EMAIL_OTP_SENT",
-                "Da gui OTP doi email", "OTP duoc gui toi " + maskEmail(newEmail), null, null);
+                "Đã gửi OTP đổi email", "OTP được gửi tới " + maskEmail(newEmail), null, null);
         return OtpChallengeResponse.builder()
                 .destination(maskEmail(newEmail))
                 .deliveryChannel("EMAIL")
                 .expiresInSeconds(CONTACT_OTP_EXPIRY_MINUTES * 60)
-                .message("OTP has been sent to your new email")
+                .message("OTP đã được gửi đến email mới của bạn")
                 .build();
     }
 
@@ -332,7 +332,7 @@ public class AccountSecurityService {
 
         otpService.verifyOtp(newEmail, request.getOtp(), OtpType.CHANGE_EMAIL);
         securityAuditService.log(userId, "ACCOUNT_SECURITY_CHANGE_EMAIL_VERIFIED",
-                "Da xac thuc OTP doi email", "OTP doi email moi da duoc xac thuc", null, null);
+                "Đã xác thực OTP đổi email", "OTP đổi email mới đã được xác thực", null, null);
 
         String token = UUID.randomUUID().toString();
         redisTemplate.opsForValue().set(
@@ -372,13 +372,13 @@ public class AccountSecurityService {
         clearContactChangeToken("change:email:token", userId, newEmail);
         logoutEverywhere(userId);
         securityAuditService.log(userId, "ACCOUNT_SECURITY_CHANGE_EMAIL_CONFIRMED",
-                "Da doi email", "Email moi da duoc cap nhat thanh " + maskEmail(newEmail), null, null);
+                "Đã đổi email", "Email mới đã được cập nhật thành " + maskEmail(newEmail), null, null);
 
         return ContactUpdateResponse.builder()
                 .email(newEmail)
                 .phone(profile.getPhone())
                 .updatedAt(profile.getUpdatedAt())
-                .message("Email updated successfully. Please login again.")
+                .message("Cập nhật email thành công. Vui lòng đăng nhập lại.")
                 .reLoginRequired(true)
                 .build();
     }
@@ -390,14 +390,14 @@ public class AccountSecurityService {
 
         String otpPreview = otpService.sendPhoneOtpMock(newPhone, CONTACT_OTP_EXPIRY_MINUTES, OtpType.CHANGE_PHONE);
         securityAuditService.log(profile.getUserId(), "ACCOUNT_SECURITY_CHANGE_PHONE_OTP_SENT",
-                "Da gui OTP doi so dien thoai", "OTP duoc tao cho " + maskPhone(newPhone), null, null);
+                "Đã gửi OTP đổi số điện thoại", "OTP được tạo cho " + maskPhone(newPhone), null, null);
         return OtpChallengeResponse.builder()
                 .destination(maskPhone(newPhone))
                 .deliveryChannel(mockSmsOtpEnabled ? "SMS_MOCK" : "SMS")
                 .expiresInSeconds(CONTACT_OTP_EXPIRY_MINUTES * 60)
                 .message(mockSmsOtpEnabled
-                        ? "OTP has been generated in mock SMS mode"
-                        : "OTP has been sent to your new phone")
+                        ? "OTP đã được tạo ở chế độ SMS mô phỏng"
+                        : "OTP đã được gửi tới số điện thoại mới của bạn")
                 .devOtpPreview(mockSmsOtpEnabled ? otpPreview : null)
                 .build();
     }
@@ -410,7 +410,7 @@ public class AccountSecurityService {
 
         otpService.verifyOtp(newPhone, request.getOtp(), OtpType.CHANGE_PHONE);
         securityAuditService.log(userId, "ACCOUNT_SECURITY_CHANGE_PHONE_VERIFIED",
-                "Da xac thuc OTP doi so dien thoai", "OTP doi so dien thoai moi da duoc xac thuc", null, null);
+                "Đã xác thực OTP đổi số điện thoại", "OTP đổi số điện thoại mới đã được xác thực", null, null);
 
         String token = UUID.randomUUID().toString();
         redisTemplate.opsForValue().set(
@@ -447,13 +447,13 @@ public class AccountSecurityService {
 
         clearContactChangeToken("change:phone:token", userId, newPhone);
         securityAuditService.log(userId, "ACCOUNT_SECURITY_CHANGE_PHONE_CONFIRMED",
-                "Da doi so dien thoai", "So dien thoai moi da duoc cap nhat thanh " + maskPhone(newPhone), null, null);
+                "Đã đổi số điện thoại", "Số điện thoại mới đã được cập nhật thành " + maskPhone(newPhone), null, null);
 
         return ContactUpdateResponse.builder()
                 .email(profile.getEmail())
                 .phone(newPhone)
                 .updatedAt(profile.getUpdatedAt())
-                .message("Phone updated successfully")
+                .message("Cập nhật số điện thoại thành công")
                 .reLoginRequired(false)
                 .build();
     }
@@ -489,6 +489,7 @@ public class AccountSecurityService {
                 .severity(severity)
                 .title(title)
                 .description(description)
+                .message(description)
                 .actionKey(actionKey)
                 .actionLabel(actionLabel)
                 .build();
@@ -552,13 +553,13 @@ public class AccountSecurityService {
                     .success(false)
                     .remainingAttempts(0)
                     .lockedUntilEpochMillis(lockedUntil)
-                    .message("Zalo Lock is temporarily locked")
+                    .message("Khóa Zalo đang bị tạm khóa")
                     .build();
         }
 
         String pinHash = readString(section.get("pinHash"), null);
         if (pinHash == null || pinHash.isBlank()) {
-            throw new BusinessException("PIN is not configured for Zalo Lock");
+            throw new BusinessException("PIN chưa được cấu hình cho Khóa Zalo");
         }
 
         if (!passwordEncoder.matches(pin, pinHash)) {
@@ -568,20 +569,20 @@ public class AccountSecurityService {
                     .success(false)
                     .remainingAttempts(remainingAttempts)
                     .lockedUntilEpochMillis(newLockedUntil)
-                    .message(remainingAttempts > 0 ? "Incorrect PIN" : "Too many failed attempts")
+                    .message(remainingAttempts > 0 ? "PIN không chính xác" : "Bạn đã nhập sai PIN quá số lần cho phép")
                     .build();
         }
 
         clearFailedPinAttempts(userId);
         if (markUnlocked) {
             securityAuditService.log(userId, "ACCOUNT_SECURITY_ZALO_LOCK_UNLOCKED",
-                    "Da mo Khoa Zalo", "Nguoi dung da mo khoa thanh cong bang PIN", null, null);
+                    "Đã mở Khóa Zalo", "Người dùng đã mở khóa thành công bằng PIN", null, null);
         }
         return ZaloLockVerifyResponse.builder()
                 .success(true)
                 .remainingAttempts(ZALO_LOCK_MAX_ATTEMPTS)
                 .lockedUntilEpochMillis(0)
-                .message("PIN verified successfully")
+                .message("Xác thực PIN thành công")
                 .build();
     }
 
@@ -605,7 +606,7 @@ public class AccountSecurityService {
                     TimeUnit.MINUTES
             );
             securityAuditService.log(userId, "ACCOUNT_SECURITY_ZALO_LOCK_LOCKED",
-                    "Khoa Zalo tam khoa", "PIN nhap sai qua so lan cho phep", null, null);
+                    "Khóa Zalo tạm khóa", "PIN nhập sai quá số lần cho phép", null, null);
             return 0;
         }
         return Math.max(0, ZALO_LOCK_MAX_ATTEMPTS - (int) attemptCount);
@@ -704,6 +705,14 @@ public class AccountSecurityService {
             throw new BusinessException("Lock method must be PIN or BIOMETRIC");
         }
         return normalized;
+    }
+
+    private String humanizeLockMethod(String method) {
+        return switch (defaultString(method).trim().toUpperCase(Locale.ROOT)) {
+            case "PIN" -> "PIN";
+            case "BIOMETRIC" -> "sinh trắc học";
+            default -> "mặc định";
+        };
     }
 
     private String resolveSecurityStrength(List<SecurityCheckResponse> checks) {

@@ -10,6 +10,7 @@ public class SecurityIssueResponse {
     private String severity;
     private String title;
     private String description;
+    private String message;
     private String actionKey;
     private String actionLabel;
 }
