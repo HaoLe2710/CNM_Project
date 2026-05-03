@@ -25,6 +25,7 @@ import fit.iuh.cnm_project_be.room.repository.ConversationMemberRepository;
 import fit.iuh.cnm_project_be.room.repository.ConversationRepository;
 import fit.iuh.cnm_project_be.room.repository.ConversationUserSettingRepository;
 import fit.iuh.cnm_project_be.user.entity.UserProfile;
+import fit.iuh.cnm_project_be.user.repository.UserBlockRepository;
 import fit.iuh.cnm_project_be.user.repository.UserProfileRepository;
 import fit.iuh.cnm_project_be.storage.S3MediaStorageService;
 import lombok.RequiredArgsConstructor;
@@ -56,6 +57,7 @@ public class ConversationService {
     private final ConversationUserSettingRepository conversationUserSettingRepository;
     private final MessageRepository messageRepository;
     private final MessageUserStateRepository messageUserStateRepository;
+    private final UserBlockRepository userBlockRepository;
     private final UserProfileRepository userProfileRepository;
     private final S3MediaStorageService s3MediaStorageService;
     private final SimpMessagingTemplate messagingTemplate;
@@ -89,6 +91,7 @@ public class ConversationService {
                     .filter(participantId -> !participantId.equals(creatorId))
                     .findFirst()
                     .orElseThrow(() -> new BusinessException("Private conversation requires one other participant"));
+            ensurePrivateConversationAvailable(creatorId, otherUserId);
 
             return conversationRepository.findPrivateConversationByParticipants(creatorId, otherUserId)
                     .map(existingConversation -> mapToResponse(existingConversation, creatorId))
@@ -692,6 +695,18 @@ public class ConversationService {
         userProfileRepository.findById(userId)
                 .filter(userProfile -> !userProfile.isDeleted())
                 .orElseThrow(() -> new NotFoundException("User not found"));
+    }
+
+    private void ensurePrivateConversationAvailable(UUID actorUserId, UUID otherUserId) {
+        if (isBlockedEitherWay(actorUserId, otherUserId)) {
+            throw new ForbiddenException(
+                    "Private conversation is unavailable because one user has blocked the other");
+        }
+    }
+
+    private boolean isBlockedEitherWay(UUID userA, UUID userB) {
+        return userBlockRepository.existsByBlockerIdAndBlockedIdAndDeletedAtIsNull(userA, userB)
+                || userBlockRepository.existsByBlockerIdAndBlockedIdAndDeletedAtIsNull(userB, userA);
     }
 
     private String normalizeConversationName(String name) {

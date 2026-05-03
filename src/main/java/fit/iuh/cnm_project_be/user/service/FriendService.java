@@ -2,7 +2,10 @@ package fit.iuh.cnm_project_be.user.service;
 
 import fit.iuh.cnm_project_be.common.exception.BusinessException;
 import fit.iuh.cnm_project_be.common.exception.NotFoundException;
+import fit.iuh.cnm_project_be.realtime.dto.RealtimeEvent;
+import fit.iuh.cnm_project_be.realtime.dto.RealtimeEventType;
 import fit.iuh.cnm_project_be.user.dto.response.FriendRequestResponse;
+import fit.iuh.cnm_project_be.user.dto.response.FriendRealtimePayload;
 import fit.iuh.cnm_project_be.user.dto.response.FriendshipResponse;
 import fit.iuh.cnm_project_be.user.dto.response.UserSearchResponse;
 import fit.iuh.cnm_project_be.user.entity.FriendRequest;
@@ -16,12 +19,15 @@ import fit.iuh.cnm_project_be.user.repository.FriendshipRepository;
 import fit.iuh.cnm_project_be.user.repository.UserBlockRepository;
 import fit.iuh.cnm_project_be.user.repository.UserProfileRepository;
 import lombok.RequiredArgsConstructor;
+import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
 import java.util.List;
+import java.util.LinkedHashSet;
+import java.util.Set;
 import java.util.UUID;
 
 @Service
@@ -35,6 +41,7 @@ public class FriendService {
     private final FriendshipRepository friendshipRepository;
     private final UserBlockRepository userBlockRepository;
     private final FriendMapper friendMapper;
+    private final SimpMessagingTemplate messagingTemplate;
 
 
 //    Tìm user
@@ -91,7 +98,16 @@ public class FriendService {
         request.setCreatedAt(Instant.now());
         request.setUpdatedAt(Instant.now());
 
-        return friendMapper.toRequestResponse(friendRequestRepository.save(request), sender, receiver);
+        FriendRequest savedRequest = friendRequestRepository.save(request);
+        FriendRequestResponse response = friendMapper.toRequestResponse(savedRequest, sender, receiver);
+        publishFriendRequestEvent(
+                RealtimeEventType.FRIEND_REQUEST_CREATED,
+                savedRequest,
+                sender,
+                receiver,
+                sender.getUserId()
+        );
+        return response;
     }
 
 //    Lấy danh sách lời mời kết bạn đến
@@ -138,6 +154,9 @@ public class FriendService {
 
         ensureUsersAreNotBlocked(request.getSenderId(), request.getReceiverId());
 
+        UserProfile sender = userService.getUser(request.getSenderId());
+        UserProfile receiver = currentUser;
+
         request.setStatus(FriendRequestStatus.ACCEPTED);
         request.setUpdatedAt(Instant.now());
         FriendRequest savedRequest = friendRequestRepository.save(request);
@@ -147,11 +166,15 @@ public class FriendService {
             friendshipRepository.save(buildFriendship(request.getReceiverId(), request.getSenderId()));
         }
 
-        return friendMapper.toRequestResponse(
+        FriendRequestResponse response = friendMapper.toRequestResponse(savedRequest, sender, receiver);
+        publishFriendRequestEvent(
+                RealtimeEventType.FRIEND_REQUEST_ACCEPTED,
                 savedRequest,
-                userService.getUser(savedRequest.getSenderId()),
-                currentUser
+                sender,
+                receiver,
+                currentUser.getUserId()
         );
+        return response;
     }
 //    Từ chối lời mời kết bạn
     @Transactional
@@ -165,15 +188,22 @@ public class FriendService {
             throw new BusinessException("Request is no longer pending");
         }
 
+        UserProfile sender = userService.getUser(request.getSenderId());
+        UserProfile receiver = currentUser;
+
         request.setStatus(FriendRequestStatus.REJECTED);
         request.setUpdatedAt(Instant.now());
 
         FriendRequest savedRequest = friendRequestRepository.save(request);
-        return friendMapper.toRequestResponse(
+        FriendRequestResponse response = friendMapper.toRequestResponse(savedRequest, sender, receiver);
+        publishFriendRequestEvent(
+                RealtimeEventType.FRIEND_REQUEST_REJECTED,
                 savedRequest,
-                userService.getUser(savedRequest.getSenderId()),
-                currentUser
+                sender,
+                receiver,
+                currentUser.getUserId()
         );
+        return response;
     }
 //    Lấy danh sách bạn bè
     @Transactional(readOnly = true)
@@ -246,6 +276,55 @@ public class FriendService {
 
         friendshipRepository.delete(mySide);
         friendshipRepository.delete(otherSide);
+        publishFriendshipRemoved(currentUser.getUserId(), friendUserId);
+    }
+
+    private void publishFriendRequestEvent(
+            RealtimeEventType eventType,
+            FriendRequest request,
+            UserProfile sender,
+            UserProfile receiver,
+            UUID actorUserId
+    ) {
+        FriendRequestResponse response = friendMapper.toRequestResponse(request, sender, receiver);
+        FriendRealtimePayload payload = FriendRealtimePayload.builder()
+                .requestId(request.getId())
+                .actorUserId(actorUserId)
+                .senderId(sender.getUserId())
+                .receiverId(receiver.getUserId())
+                .otherUserId(actorUserId != null && actorUserId.equals(sender.getUserId())
+                        ? receiver.getUserId()
+                        : sender.getUserId())
+                .requestStatus(request.getStatus())
+                .request(response)
+                .build();
+
+        publishToFriendTopic(Set.of(sender.getUserId(), receiver.getUserId()), eventType, payload);
+    }
+
+    private void publishFriendshipRemoved(UUID actorUserId, UUID otherUserId) {
+        FriendRealtimePayload payload = FriendRealtimePayload.builder()
+                .actorUserId(actorUserId)
+                .senderId(actorUserId)
+                .receiverId(otherUserId)
+                .otherUserId(otherUserId)
+                .build();
+
+        publishToFriendTopic(Set.of(actorUserId, otherUserId), RealtimeEventType.FRIENDSHIP_REMOVED, payload);
+    }
+
+    private void publishToFriendTopic(
+            Set<UUID> userIds,
+            RealtimeEventType eventType,
+            FriendRealtimePayload payload
+    ) {
+        Set<UUID> uniqueUserIds = new LinkedHashSet<>(userIds);
+        uniqueUserIds.stream()
+                .filter(userId -> userId != null)
+                .forEach(userId -> messagingTemplate.convertAndSend(
+                        "/topic/users/" + userId + "/friends",
+                        RealtimeEvent.of(eventType, payload)
+                ));
     }
 
 }

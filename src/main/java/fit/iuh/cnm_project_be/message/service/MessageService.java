@@ -47,6 +47,7 @@ import fit.iuh.cnm_project_be.room.repository.ConversationRepository;
 import fit.iuh.cnm_project_be.room.repository.ConversationUserSettingRepository;
 import fit.iuh.cnm_project_be.storage.S3MediaStorageService;
 import fit.iuh.cnm_project_be.user.entity.UserProfile;
+import fit.iuh.cnm_project_be.user.repository.UserBlockRepository;
 import fit.iuh.cnm_project_be.user.repository.UserProfileRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -97,6 +98,7 @@ public class MessageService {
     private final ConversationRepository conversationRepository;
     private final ConversationMemberRepository conversationMemberRepository;
     private final ConversationUserSettingRepository conversationUserSettingRepository;
+    private final UserBlockRepository userBlockRepository;
     private final UserProfileRepository userProfileRepository;
     private final SimpMessagingTemplate messagingTemplate;
     private final S3MediaStorageService s3MediaStorageService;
@@ -108,6 +110,7 @@ public class MessageService {
     public MessageResponse sendMessage(UUID senderId, SendMessageRequest request) {
         Conversation conversation = getConversationOrThrow(request.getConversationId());
         ensureConversationMember(conversation.getId(), senderId);
+        ensurePrivateConversationInteractionAllowed(conversation, senderId);
         validatePayload(request);
         String normalizedContent = normalizeNullableText(request.getContent());
         String resolvedOriginalLinkUrl = resolveOriginalLinkUrl(normalizedContent, request.getOriginalLinkUrl());
@@ -226,6 +229,7 @@ public class MessageService {
                 .orElseThrow(() -> new NotFoundException("Message not found"));
 
         ensureConversationMember(message.getConversationId(), actorId);
+        ensurePrivateConversationInteractionAllowed(getConversationOrThrow(message.getConversationId()), actorId);
         if (!message.getSenderId().equals(actorId)) {
             throw new ForbiddenException("Only the sender can edit the message");
         }
@@ -311,6 +315,7 @@ public class MessageService {
     public void addOrUpdateReaction(Long messageId, UUID userId, MessageReactionRequest request) {
         Message message = getVisibleMessageOrThrow(messageId);
         ensureConversationMember(message.getConversationId(), userId);
+        ensurePrivateConversationInteractionAllowed(getConversationOrThrow(message.getConversationId()), userId);
 
         MessageReaction reaction = messageReactionRepository.findByMessageIdAndUserId(messageId, userId)
                 .orElseGet(() -> {
@@ -332,6 +337,7 @@ public class MessageService {
     public void removeReaction(Long messageId, UUID userId) {
         Message message = getVisibleMessageOrThrow(messageId);
         ensureConversationMember(message.getConversationId(), userId);
+        ensurePrivateConversationInteractionAllowed(getConversationOrThrow(message.getConversationId()), userId);
 
         if (messageReactionRepository.findByMessageIdAndUserId(messageId, userId).isEmpty()) {
             return;
@@ -412,8 +418,9 @@ public class MessageService {
 
     @Transactional(readOnly = true)
     public void assertConversationAccess(UUID conversationId, UUID userId) {
-        getConversationOrThrow(conversationId);
+        Conversation conversation = getConversationOrThrow(conversationId);
         ensureConversationMember(conversationId, userId);
+        ensurePrivateConversationInteractionAllowed(conversation, userId);
     }
 
     @Transactional(readOnly = true)
@@ -831,6 +838,24 @@ public class MessageService {
             throw new NotFoundException("Message not found");
         }
         return message;
+    }
+
+    private void ensurePrivateConversationInteractionAllowed(Conversation conversation, UUID actorUserId) {
+        if (conversation.getType() != ConversationType.PRIVATE || actorUserId == null) {
+            return;
+        }
+
+        conversationMemberRepository.findPartnerUserId(conversation.getId(), actorUserId)
+                .filter(partnerUserId -> isBlockedEitherWay(actorUserId, partnerUserId))
+                .ifPresent(partnerUserId -> {
+                    throw new ForbiddenException(
+                            "Private conversation is unavailable because one user has blocked the other");
+                });
+    }
+
+    private boolean isBlockedEitherWay(UUID userA, UUID userB) {
+        return userBlockRepository.existsByBlockerIdAndBlockedIdAndDeletedAtIsNull(userA, userB)
+                || userBlockRepository.existsByBlockerIdAndBlockedIdAndDeletedAtIsNull(userB, userA);
     }
 
     private void broadcastConversationUpdates(UUID conversationId) {

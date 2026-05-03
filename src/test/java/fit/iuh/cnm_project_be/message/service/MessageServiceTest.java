@@ -28,6 +28,7 @@ import fit.iuh.cnm_project_be.room.repository.ConversationRepository;
 import fit.iuh.cnm_project_be.room.repository.ConversationUserSettingRepository;
 import fit.iuh.cnm_project_be.storage.S3MediaStorageService;
 import fit.iuh.cnm_project_be.user.entity.UserProfile;
+import fit.iuh.cnm_project_be.user.repository.UserBlockRepository;
 import fit.iuh.cnm_project_be.user.repository.UserProfileRepository;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -75,6 +76,8 @@ class MessageServiceTest {
     private ConversationUserSettingRepository conversationUserSettingRepository;
     @Mock
     private UserProfileRepository userProfileRepository;
+    @Mock
+    private UserBlockRepository userBlockRepository;
     @Mock
     private SimpMessagingTemplate messagingTemplate;
     @Mock
