@@ -3,6 +3,8 @@ package fit.iuh.cnm_project_be.auth.controller;
 
 import fit.iuh.cnm_project_be.auth.dto.request.ConfirmPasswordChangeRequest;
 import fit.iuh.cnm_project_be.auth.dto.request.CheckEmailRequest;
+import fit.iuh.cnm_project_be.auth.dto.request.ConfirmChangeEmailRequest;
+import fit.iuh.cnm_project_be.auth.dto.request.ConfirmChangePhoneRequest;
 import fit.iuh.cnm_project_be.auth.dto.request.DeviceLoginApprovalRequest;
 import fit.iuh.cnm_project_be.auth.dto.request.DeviceLoginRequest;
 import fit.iuh.cnm_project_be.auth.dto.request.ForgotPasswordResetRequest;
@@ -10,18 +12,36 @@ import fit.iuh.cnm_project_be.auth.dto.request.ForgotPasswordSendOtpRequest;
 import fit.iuh.cnm_project_be.auth.dto.request.ForgotPasswordVerifyOtpRequest;
 import fit.iuh.cnm_project_be.auth.dto.request.LoginRequest;
 import fit.iuh.cnm_project_be.auth.dto.request.RegisterRequest;
+import fit.iuh.cnm_project_be.auth.dto.request.SendChangeEmailOtpRequest;
+import fit.iuh.cnm_project_be.auth.dto.request.SendChangePhoneOtpRequest;
 import fit.iuh.cnm_project_be.auth.dto.request.SendOtpRequest;
+import fit.iuh.cnm_project_be.auth.dto.request.UnlockZaloLockRequest;
+import fit.iuh.cnm_project_be.auth.dto.request.UpdateZaloLockRequest;
+import fit.iuh.cnm_project_be.auth.dto.request.VerifyChangeEmailOtpRequest;
+import fit.iuh.cnm_project_be.auth.dto.request.VerifyChangePhoneOtpRequest;
 import fit.iuh.cnm_project_be.auth.dto.request.VerifyCurrentPasswordRequest;
 import fit.iuh.cnm_project_be.auth.dto.request.VerifyOtpRequest;
+import fit.iuh.cnm_project_be.auth.dto.request.VerifyZaloLockPinRequest;
 import fit.iuh.cnm_project_be.auth.dto.request.LogoutDeviceRequest;
+import fit.iuh.cnm_project_be.auth.dto.response.AccountSecuritySummaryResponse;
+import fit.iuh.cnm_project_be.auth.dto.response.ContactUpdateResponse;
 import fit.iuh.cnm_project_be.auth.dto.response.ForgotPasswordVerifyOtpResponse;
 import fit.iuh.cnm_project_be.auth.dto.response.CheckEmailResponse;
 import fit.iuh.cnm_project_be.auth.dto.response.DeviceLoginQrResponse;
 import fit.iuh.cnm_project_be.auth.dto.response.DeviceLoginStatusResponse;
 import fit.iuh.cnm_project_be.auth.dto.response.LoginResponse;
+import fit.iuh.cnm_project_be.auth.dto.response.LogoutAllDevicesResponse;
+import fit.iuh.cnm_project_be.auth.dto.response.OtpChallengeResponse;
+import fit.iuh.cnm_project_be.auth.dto.response.OtpVerificationTokenResponse;
 import fit.iuh.cnm_project_be.auth.dto.response.RefreshTokenResponse;
+import fit.iuh.cnm_project_be.auth.dto.response.SecurityHistoryItemResponse;
+import fit.iuh.cnm_project_be.auth.dto.response.UserQrCodeResponse;
 import fit.iuh.cnm_project_be.auth.dto.response.VerifyPasswordResponse;
 import fit.iuh.cnm_project_be.auth.dto.response.UserDeviceResponseDto;
+import fit.iuh.cnm_project_be.auth.dto.response.ZaloLockChallengeResponse;
+import fit.iuh.cnm_project_be.auth.dto.response.ZaloLockSettingsResponse;
+import fit.iuh.cnm_project_be.auth.dto.response.ZaloLockVerifyResponse;
+import fit.iuh.cnm_project_be.auth.service.AccountSecurityService;
 import fit.iuh.cnm_project_be.auth.service.AuthService;
 import fit.iuh.cnm_project_be.auth.service.PasswordService;
 import fit.iuh.cnm_project_be.auth.service.OtpService;
@@ -52,6 +72,7 @@ public class AuthController {
     AuthService authService;
     OtpService otpService;
     PasswordService passwordService;
+    AccountSecurityService accountSecurityService;
 
 
     @PostMapping("/device-login-request")
@@ -297,6 +318,116 @@ public class AuthController {
         
         authService.logoutDevice(userId, request.getDeviceId(), request.getPlatform());
         return ApiResponse.ok("Device logged out successfully", UUID.randomUUID().toString());
+    }
+
+    @PostMapping("/logout-all-devices")
+    public ApiResponse<LogoutAllDevicesResponse> logoutAllDevices() {
+        UUID userId = getCurrentUserId();
+        return ApiResponse.ok(authService.logoutAllDevices(userId), UUID.randomUUID().toString());
+    }
+
+    @GetMapping("/devices/logout-history")
+    public ApiResponse<List<SecurityHistoryItemResponse>> getDeviceLogoutHistory(
+            @RequestParam(required = false) Integer size
+    ) {
+        UUID userId = getCurrentUserId();
+        return ApiResponse.ok(authService.getLogoutHistory(userId, size), UUID.randomUUID().toString());
+    }
+
+    @GetMapping("/account-security/summary")
+    public ApiResponse<AccountSecuritySummaryResponse> getAccountSecuritySummary() {
+        return ApiResponse.ok(accountSecurityService.getSummary(), UUID.randomUUID().toString());
+    }
+
+    @GetMapping("/account-security/zalo-lock")
+    public ApiResponse<ZaloLockSettingsResponse> getZaloLockSettings() {
+        return ApiResponse.ok(accountSecurityService.getZaloLockSettings(), UUID.randomUUID().toString());
+    }
+
+    @PatchMapping("/account-security/zalo-lock")
+    public ApiResponse<ZaloLockSettingsResponse> updateZaloLock(
+            @RequestBody UpdateZaloLockRequest request
+    ) {
+        return ApiResponse.ok(accountSecurityService.updateZaloLock(request), UUID.randomUUID().toString());
+    }
+
+    @PostMapping("/account-security/zalo-lock/challenge")
+    public ApiResponse<ZaloLockChallengeResponse> createZaloLockChallenge() {
+        return ApiResponse.ok(accountSecurityService.createZaloLockChallenge(), UUID.randomUUID().toString());
+    }
+
+    @PostMapping("/account-security/zalo-lock/verify")
+    public ApiResponse<ZaloLockVerifyResponse> verifyZaloLockPin(
+            @RequestBody @Valid VerifyZaloLockPinRequest request
+    ) {
+        return ApiResponse.ok(accountSecurityService.verifyZaloLockPin(request), UUID.randomUUID().toString());
+    }
+
+    @PostMapping("/account-security/zalo-lock/unlock")
+    public ApiResponse<ZaloLockVerifyResponse> unlockZaloLock(
+            @RequestBody @Valid UnlockZaloLockRequest request
+    ) {
+        return ApiResponse.ok(accountSecurityService.unlockZaloLock(request), UUID.randomUUID().toString());
+    }
+
+    @GetMapping("/account-security/my-qr")
+    public ApiResponse<UserQrCodeResponse> getMyQrCode() {
+        return ApiResponse.ok(accountSecurityService.getMyQrCode(), UUID.randomUUID().toString());
+    }
+
+    @PostMapping("/account-security/my-qr/refresh")
+    public ApiResponse<UserQrCodeResponse> refreshMyQrCode() {
+        return ApiResponse.ok(accountSecurityService.refreshMyQrCode(), UUID.randomUUID().toString());
+    }
+
+    @GetMapping("/account-security/history")
+    public ApiResponse<List<SecurityHistoryItemResponse>> getAccountSecurityHistory(
+            @RequestParam(required = false) String month,
+            @RequestParam(required = false) Integer size
+    ) {
+        return ApiResponse.ok(accountSecurityService.getHistory(month, size), UUID.randomUUID().toString());
+    }
+
+    @PostMapping("/account-security/email/send-otp")
+    public ApiResponse<OtpChallengeResponse> sendChangeEmailOtp(
+            @RequestBody @Valid SendChangeEmailOtpRequest request
+    ) {
+        return ApiResponse.ok(accountSecurityService.sendChangeEmailOtp(request), UUID.randomUUID().toString());
+    }
+
+    @PostMapping("/account-security/email/verify-otp")
+    public ApiResponse<OtpVerificationTokenResponse> verifyChangeEmailOtp(
+            @RequestBody @Valid VerifyChangeEmailOtpRequest request
+    ) {
+        return ApiResponse.ok(accountSecurityService.verifyChangeEmailOtp(request), UUID.randomUUID().toString());
+    }
+
+    @PostMapping("/account-security/email/confirm")
+    public ApiResponse<ContactUpdateResponse> confirmChangeEmail(
+            @RequestBody @Valid ConfirmChangeEmailRequest request
+    ) {
+        return ApiResponse.ok(accountSecurityService.confirmChangeEmail(request), UUID.randomUUID().toString());
+    }
+
+    @PostMapping("/account-security/phone/send-otp")
+    public ApiResponse<OtpChallengeResponse> sendChangePhoneOtp(
+            @RequestBody @Valid SendChangePhoneOtpRequest request
+    ) {
+        return ApiResponse.ok(accountSecurityService.sendChangePhoneOtp(request), UUID.randomUUID().toString());
+    }
+
+    @PostMapping("/account-security/phone/verify-otp")
+    public ApiResponse<OtpVerificationTokenResponse> verifyChangePhoneOtp(
+            @RequestBody @Valid VerifyChangePhoneOtpRequest request
+    ) {
+        return ApiResponse.ok(accountSecurityService.verifyChangePhoneOtp(request), UUID.randomUUID().toString());
+    }
+
+    @PostMapping("/account-security/phone/confirm")
+    public ApiResponse<ContactUpdateResponse> confirmChangePhone(
+            @RequestBody @Valid ConfirmChangePhoneRequest request
+    ) {
+        return ApiResponse.ok(accountSecurityService.confirmChangePhone(request), UUID.randomUUID().toString());
     }
 
     /**

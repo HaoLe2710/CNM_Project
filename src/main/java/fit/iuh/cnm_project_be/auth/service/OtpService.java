@@ -33,8 +33,7 @@ public class OtpService {
     public void sendOtp(String email, long expiryMinutes, OtpType type) {
         String otp = generateOtp();
 
-        // Structure: otp:TYPE:email
-        String key = "otp:" + type.name() + ":" + email;
+        String key = buildOtpKey(email, type);
         redisTemplate.opsForValue().set(key, otp, expiryMinutes, TimeUnit.MINUTES);
 
         try {
@@ -47,7 +46,7 @@ public class OtpService {
     }
 
     public boolean verifyOtp(String email, String inputOtp, OtpType type) {
-        String key = "otp:" + type.name() + ":" + email;
+        String key = buildOtpKey(email, type);
         Object savedOtp = redisTemplate.opsForValue().get(key);
 
         if (savedOtp == null) {
@@ -96,5 +95,18 @@ public class OtpService {
     public void sendRegisterOtp(String email) {
         log.info("[OTP] - Processing registration OTP request for: {}", email);
         this.sendOtp(email, REGISTER_EXPIRY, OtpType.REGISTER);
+    }
+
+    public String sendPhoneOtpMock(String phone, long expiryMinutes, OtpType type) {
+        String otp = generateOtp();
+        String key = buildOtpKey(phone, type);
+        redisTemplate.opsForValue().set(key, otp, expiryMinutes, TimeUnit.MINUTES);
+        log.warn("[OTP-MOCK] - Mock phone OTP generated [type: {}, phone: {}, otp: {}, expiry: {} mins]",
+                type, phone, otp, expiryMinutes);
+        return otp;
+    }
+
+    private String buildOtpKey(String identifier, OtpType type) {
+        return "otp:" + type.name() + ":" + identifier;
     }
 }

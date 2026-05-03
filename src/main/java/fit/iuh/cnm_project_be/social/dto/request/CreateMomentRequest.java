@@ -1,6 +1,7 @@
 package fit.iuh.cnm_project_be.social.dto.request;
 
 import fit.iuh.cnm_project_be.social.enums.MediaType;
+import fit.iuh.cnm_project_be.social.enums.MomentVisibilityMode;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import lombok.Getter;
@@ -17,4 +18,10 @@ public class CreateMomentRequest {
     private MediaType mediaType;
 
     private String caption;
+
+    private String coverUrl;
+
+    private Integer durationSeconds;
+
+    private MomentVisibilityMode visibilityMode;
 }

@@ -2,8 +2,11 @@ package fit.iuh.cnm_project_be.social.controller;
 
 import fit.iuh.cnm_project_be.common.api.ApiResponse;
 import fit.iuh.cnm_project_be.social.dto.request.CreateMomentRequest;
+import fit.iuh.cnm_project_be.social.dto.request.CreateMomentCommentRequest;
 import fit.iuh.cnm_project_be.social.dto.request.CreatePostCommentRequest;
 import fit.iuh.cnm_project_be.social.dto.request.CreatePostRequest;
+import fit.iuh.cnm_project_be.social.dto.response.CommunityVideoFeedResponse;
+import fit.iuh.cnm_project_be.social.dto.response.MomentCommentResponse;
 import fit.iuh.cnm_project_be.social.dto.response.MomentResponse;
 import fit.iuh.cnm_project_be.social.dto.response.PostAudienceResponse;
 import fit.iuh.cnm_project_be.social.dto.response.PostCommentResponse;
@@ -148,6 +151,11 @@ public class SocialController {
         return ApiResponse.ok(socialService.getMyMoments(size), UUID.randomUUID().toString());
     }
 
+    @GetMapping("/moments/feed")
+    public ApiResponse<List<MomentResponse>> getStoryFeed(@RequestParam(required = false) Integer size) {
+        return ApiResponse.ok(socialService.getStoryFeed(size), UUID.randomUUID().toString());
+    }
+
     @DeleteMapping("/moments/{momentId}")
     public ApiResponse<Void> deleteMoment(@PathVariable UUID momentId) {
         socialService.deleteMoment(momentId);
@@ -157,6 +165,41 @@ public class SocialController {
     @GetMapping("/videos/feed")
     public ApiResponse<List<MomentResponse>> getVideoFeed(@RequestParam(required = false) Integer size) {
         return ApiResponse.ok(socialService.getRandomVideoFeed(size), UUID.randomUUID().toString());
+    }
+
+    @GetMapping("/videos/community-feed")
+    public ApiResponse<CommunityVideoFeedResponse> getCommunityVideoFeed(
+            @RequestParam(required = false) String cursor,
+            @RequestParam(required = false) Integer size) {
+        return ApiResponse.ok(socialService.getCommunityVideoFeed(cursor, size), UUID.randomUUID().toString());
+    }
+
+    @PutMapping("/videos/{momentId}/like")
+    public ApiResponse<MomentResponse> likeVideo(@PathVariable UUID momentId) {
+        return ApiResponse.ok(socialService.likeVideo(momentId), UUID.randomUUID().toString());
+    }
+
+    @DeleteMapping("/videos/{momentId}/like")
+    public ApiResponse<MomentResponse> unlikeVideo(@PathVariable UUID momentId) {
+        return ApiResponse.ok(socialService.unlikeVideo(momentId), UUID.randomUUID().toString());
+    }
+
+    @GetMapping("/videos/{momentId}/comments")
+    public ApiResponse<List<MomentCommentResponse>> getMomentComments(@PathVariable UUID momentId) {
+        return ApiResponse.ok(socialService.getMomentComments(momentId), UUID.randomUUID().toString());
+    }
+
+    @PostMapping("/videos/{momentId}/comments")
+    public ApiResponse<MomentCommentResponse> addMomentComment(
+            @PathVariable UUID momentId,
+            @Valid @RequestBody CreateMomentCommentRequest request) {
+        return ApiResponse.ok(socialService.addMomentComment(momentId, request), UUID.randomUUID().toString());
+    }
+
+    @PostMapping("/videos/{momentId}/view")
+    public ApiResponse<Void> recordMomentView(@PathVariable UUID momentId) {
+        socialService.recordMomentView(momentId);
+        return ApiResponse.ok(null, UUID.randomUUID().toString());
     }
 
     @PostMapping(value = "/media/upload", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)

@@ -12,4 +12,8 @@ public interface MomentReactionRepository
     List<MomentReaction> findByMomentId(UUID momentId);
 
     boolean existsByMomentIdAndUserId(UUID momentId, UUID userId);
+
+    long countByMomentId(UUID momentId);
+
+    void deleteByMomentIdAndUserId(UUID momentId, UUID userId);
 }

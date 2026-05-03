@@ -3,6 +3,7 @@ package fit.iuh.cnm_project_be.user.entity;
 import jakarta.persistence.*;
 import lombok.Getter;
 import lombok.Setter;
+import org.hibernate.annotations.ColumnTransformer;
 
 import java.time.Instant;
 import java.util.UUID;
@@ -22,6 +23,7 @@ public class UserSetting {
     private String key;
 
     @Column(columnDefinition = "jsonb")
+    @ColumnTransformer(write = "?::jsonb")
     private String value;
 
     @Column(name = "updated_at", nullable = false)

@@ -6,10 +6,14 @@ import fit.iuh.cnm_project_be.user.dto.request.UpdateUserSettingsRequest;
 import fit.iuh.cnm_project_be.user.dto.response.UserProfileResponse;
 import fit.iuh.cnm_project_be.user.dto.response.UserSearchResponse;
 import fit.iuh.cnm_project_be.user.dto.response.UserSettingsResponse;
+import fit.iuh.cnm_project_be.user.dto.response.UserStorageCleanupResponse;
+import fit.iuh.cnm_project_be.user.dto.response.UserStorageFileItemResponse;
+import fit.iuh.cnm_project_be.user.dto.response.UserStorageSummaryResponse;
 import fit.iuh.cnm_project_be.user.entity.UserProfile;
 import fit.iuh.cnm_project_be.auth.service.AuthService;
 import fit.iuh.cnm_project_be.user.service.FriendService;
 import fit.iuh.cnm_project_be.user.service.UserSettingService;
+import fit.iuh.cnm_project_be.user.service.UserStorageService;
 import fit.iuh.cnm_project_be.user.service.UserService;
 import jakarta.validation.Valid;
 import lombok.AccessLevel;
@@ -47,6 +51,7 @@ public class UserController {
     AuthService authService;
     FriendService friendService;
     UserSettingService userSettingService;
+    UserStorageService userStorageService;
 
     @GetMapping("/profile")
     public ApiResponse<UserProfileResponse> getUserProfile() {
@@ -111,6 +116,33 @@ public class UserController {
                 userSettingService.updateMySettings(request.getSettings()),
                 UUID.randomUUID().toString()
         );
+    }
+
+    @GetMapping("/storage/summary")
+    public ApiResponse<UserStorageSummaryResponse> getStorageSummary() {
+        return ApiResponse.ok(userStorageService.getSummary(), UUID.randomUUID().toString());
+    }
+
+    @GetMapping("/storage/large-files")
+    public ApiResponse<List<UserStorageFileItemResponse>> getLargeFiles(
+            @RequestParam(defaultValue = "20") Integer limit
+    ) {
+        return ApiResponse.ok(userStorageService.getLargeFiles(limit == null ? 20 : limit), UUID.randomUUID().toString());
+    }
+
+    @PostMapping("/storage/cache/cleanup")
+    public ApiResponse<UserStorageCleanupResponse> cleanupCache() {
+        return ApiResponse.ok(userStorageService.cleanupCache(), UUID.randomUUID().toString());
+    }
+
+    @PostMapping("/storage/large-files/cleanup")
+    public ApiResponse<UserStorageCleanupResponse> cleanupLargeFiles() {
+        return ApiResponse.ok(userStorageService.cleanupLargeFiles(), UUID.randomUUID().toString());
+    }
+
+    @PostMapping("/storage/chat-data/cleanup")
+    public ApiResponse<UserStorageCleanupResponse> cleanupChatData() {
+        return ApiResponse.ok(userStorageService.cleanupChatData(), UUID.randomUUID().toString());
     }
 
     private UserProfileResponse toResponse(UserProfile profile) {

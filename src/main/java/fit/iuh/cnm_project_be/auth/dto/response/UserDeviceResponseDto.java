@@ -18,4 +18,7 @@ public class UserDeviceResponseDto {
     String deviceName;
     Instant lastSeenAt;
     Instant createdAt;
+    String location;
+    String loginMethod;
+    Boolean trustedDevice;
 }

@@ -13,6 +13,7 @@ import fit.iuh.cnm_project_be.common.exception.BusinessException;
 import fit.iuh.cnm_project_be.user.entity.UserDevice;
 import fit.iuh.cnm_project_be.user.enums.Platform;
 import fit.iuh.cnm_project_be.user.service.UserDeviceService;
+import fit.iuh.cnm_project_be.user.service.UserSettingService;
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.AccessLevel;
 import lombok.AllArgsConstructor;
@@ -48,6 +49,7 @@ public class DeviceLoginService {
     StringRedisTemplate redisTemplate;
     AccountRepository accountRepository;
     UserDeviceService userDeviceService;
+    UserSettingService userSettingService;
     JwtUtils jwtUtils;
     TokenCookieService tokenCookieService;
     TokenRedisService tokenRedisService;
@@ -95,11 +97,24 @@ public class DeviceLoginService {
     }
 
     public boolean shouldRequireApproval(UUID userId, String deviceId, Platform platform) {
+        if (platform != Platform.WEB) {
+            return false;
+        }
+
         if (userDeviceService.isDeviceValid(userId, deviceId, platform)) {
             return false;
         }
 
-        return !userDeviceService.getUserDeviceByUserId(userId).isEmpty();
+        boolean requireDeviceApproval = Boolean.TRUE.equals(
+                userSettingService.getSection(userId, "accountSecurity").get("requireDeviceApproval")
+        );
+        if (!requireDeviceApproval) {
+            return false;
+        }
+
+        return userDeviceService.getUserDeviceByUserId(userId)
+                .stream()
+                .anyMatch(device -> device.getPlatform() == Platform.ANDROID || device.getPlatform() == Platform.IOS);
     }
 
     public DeviceLoginStatusResponse getStatus(String approvalId, HttpServletResponse response) {
