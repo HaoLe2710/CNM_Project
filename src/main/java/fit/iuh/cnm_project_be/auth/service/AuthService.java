@@ -150,8 +150,8 @@ public class AuthService {
                         .deviceName(device.getDeviceName())
                         .lastSeenAt(device.getLastSeenAt())
                         .createdAt(device.getCreatedAt())
-                        .location("Unknown")
-                        .loginMethod("PASSWORD")
+                        .location("Chưa xác định")
+                        .loginMethod("Mật khẩu")
                         .trustedDevice(Boolean.TRUE)
                         .build())
                 .collect(Collectors.toList());
@@ -182,8 +182,8 @@ public class AuthService {
         securityAuditService.log(
                 userId,
                 "DEVICE_LOGOUT_SINGLE",
-                "Da dang xuat 1 thiet bi",
-                "Da dang xuat thiet bi " + normalizedDeviceId + " tren nen tang " + normalizedPlatform,
+                "Đã đăng xuất 1 thiết bị",
+                "Đã đăng xuất thiết bị " + normalizedDeviceId + " trên nền tảng " + normalizedPlatform,
                 normalizedDeviceId,
                 normalizedPlatform
         );
@@ -194,7 +194,7 @@ public class AuthService {
                     fit.iuh.cnm_project_be.auth.websocket.DeviceAuthWebSocketController.DeviceLogoutMessage.builder()
                     .deviceId(normalizedDeviceId)
                     .platform(normalizedPlatform)
-                    .message("Device logged out successfully")
+                    .message("Đã đăng xuất thiết bị thành công")
                     .timestamp(System.currentTimeMillis())
                     .build();
             messagingTemplate.convertAndSend(topicName, response);
@@ -215,8 +215,8 @@ public class AuthService {
         securityAuditService.log(
                 userId,
                 "DEVICE_LOGOUT_ALL",
-                "Da dang xuat tat ca thiet bi",
-                "Tat ca cac phien dang nhap da duoc thu hoi o cap refresh token va danh sach thiet bi",
+                "Đã đăng xuất tất cả thiết bị",
+                "Tất cả các phiên đăng nhập đã được thu hồi ở cấp refresh token và danh sách thiết bị",
                 null,
                 null
         );
@@ -224,7 +224,7 @@ public class AuthService {
         return LogoutAllDevicesResponse.builder()
                 .loggedOutDeviceCount(deviceCount)
                 .currentSessionMayRemainUntilExpiry(true)
-                .message("All remembered devices were signed out. The current access token may remain valid until it expires.")
+                .message("Đã đăng xuất tất cả thiết bị đã ghi nhớ. Access token hiện tại có thể còn hiệu lực cho đến khi hết hạn.")
                 .build();
     }
 
