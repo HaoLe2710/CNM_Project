@@ -85,6 +85,14 @@ public class MailService {
                 subject = "[Zalo App] Ma xac thuc doi mat khau";
                 actionName = "Doi mat khau";
             }
+            case CHANGE_EMAIL -> {
+                subject = "[Zalo App] Ma xac thuc doi email";
+                actionName = "Doi email tai khoan";
+            }
+            case CHANGE_PHONE -> {
+                subject = "[Zalo App] Ma xac thuc doi so dien thoai";
+                actionName = "Doi so dien thoai";
+            }
             default -> {
                 subject = "[Zalo App] Ma xac thuc he thong";
                 actionName = "Xac thuc danh tinh";

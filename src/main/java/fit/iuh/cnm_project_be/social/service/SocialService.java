@@ -5,9 +5,12 @@ import fit.iuh.cnm_project_be.common.exception.NotFoundException;
 import fit.iuh.cnm_project_be.message.dto.UploadAttachmentResponse;
 import fit.iuh.cnm_project_be.message.enums.MessageType;
 import fit.iuh.cnm_project_be.social.dto.request.CreateMomentRequest;
+import fit.iuh.cnm_project_be.social.dto.request.CreateMomentCommentRequest;
 import fit.iuh.cnm_project_be.social.dto.request.CreatePostCommentRequest;
 import fit.iuh.cnm_project_be.social.dto.request.CreatePostMediaItemRequest;
 import fit.iuh.cnm_project_be.social.dto.request.CreatePostRequest;
+import fit.iuh.cnm_project_be.social.dto.response.CommunityVideoFeedResponse;
+import fit.iuh.cnm_project_be.social.dto.response.MomentCommentResponse;
 import fit.iuh.cnm_project_be.social.dto.response.MomentResponse;
 import fit.iuh.cnm_project_be.social.dto.response.PostAudienceResponse;
 import fit.iuh.cnm_project_be.social.dto.response.PostCommentResponse;
@@ -17,6 +20,7 @@ import fit.iuh.cnm_project_be.social.dto.response.PostMediaResponse;
 import fit.iuh.cnm_project_be.social.dto.response.PostResponse;
 import fit.iuh.cnm_project_be.social.dto.response.SocialMediaUploadResponse;
 import fit.iuh.cnm_project_be.social.entity.Moment;
+import fit.iuh.cnm_project_be.social.entity.MomentComment;
 import fit.iuh.cnm_project_be.social.entity.PostComment;
 import fit.iuh.cnm_project_be.social.entity.PostCommentLike;
 import fit.iuh.cnm_project_be.social.entity.PostLike;
@@ -24,10 +28,17 @@ import fit.iuh.cnm_project_be.social.entity.Post;
 import fit.iuh.cnm_project_be.social.entity.PostMedia;
 import fit.iuh.cnm_project_be.social.entity.PostTag;
 import fit.iuh.cnm_project_be.social.entity.PostVisibilityGrant;
+import fit.iuh.cnm_project_be.social.entity.MomentReaction;
+import fit.iuh.cnm_project_be.social.entity.MomentView;
 import fit.iuh.cnm_project_be.social.enums.MediaType;
+import fit.iuh.cnm_project_be.social.enums.MomentVisibilityMode;
 import fit.iuh.cnm_project_be.social.enums.PostInteractionScope;
 import fit.iuh.cnm_project_be.social.enums.PostVisibilityMode;
+import fit.iuh.cnm_project_be.social.enums.ReactionType;
+import fit.iuh.cnm_project_be.social.repository.MomentCommentRepository;
+import fit.iuh.cnm_project_be.social.repository.MomentReactionRepository;
 import fit.iuh.cnm_project_be.social.repository.MomentRepository;
+import fit.iuh.cnm_project_be.social.repository.MomentViewRepository;
 import fit.iuh.cnm_project_be.social.repository.PostCommentRepository;
 import fit.iuh.cnm_project_be.social.repository.PostCommentLikeRepository;
 import fit.iuh.cnm_project_be.social.repository.PostLikeRepository;
@@ -55,6 +66,8 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 import java.util.UUID;
+import java.util.Base64;
+import java.nio.charset.StandardCharsets;
 
 @Service
 @RequiredArgsConstructor
@@ -63,6 +76,7 @@ public class SocialService {
     private static final int DEFAULT_PAGE_SIZE = 20;
     private static final int MAX_PAGE_SIZE = 50;
     private static final int VIDEO_CANDIDATE_MULTIPLIER = 3;
+    private static final int STORY_WINDOW_HOURS = 24;
 
     private final PostRepository postRepository;
     private final PostLikeRepository postLikeRepository;
@@ -72,6 +86,9 @@ public class SocialService {
     private final PostTagRepository postTagRepository;
     private final PostVisibilityGrantRepository postVisibilityGrantRepository;
     private final MomentRepository momentRepository;
+    private final MomentReactionRepository momentReactionRepository;
+    private final MomentCommentRepository momentCommentRepository;
+    private final MomentViewRepository momentViewRepository;
     private final FriendshipRepository friendshipRepository;
     private final UserBlockRepository userBlockRepository;
     private final UserService userService;
@@ -310,6 +327,9 @@ public class SocialService {
         moment.setMediaUrl(request.getMediaUrl().trim());
         moment.setMediaType(request.getMediaType());
         moment.setCaption(trimToNull(request.getCaption()));
+        moment.setCoverUrl(trimToNull(request.getCoverUrl()));
+        moment.setDurationSeconds(request.getDurationSeconds() == null ? 0 : Math.max(request.getDurationSeconds(), 0));
+        moment.setVisibilityMode(request.getVisibilityMode() == null ? MomentVisibilityMode.FRIENDS : request.getVisibilityMode());
 
         return toMomentResponse(momentRepository.save(moment));
     }
@@ -321,6 +341,54 @@ public class SocialService {
                 .limit(normalizeSize(size))
                 .map(this::toMomentResponse)
                 .toList();
+    }
+
+    @Transactional(readOnly = true)
+    public List<MomentResponse> getStoryFeed(Integer size) {
+        UUID currentUserId = currentUser().getUserId();
+        Set<UUID> visibleUserIds = new HashSet<>(getFriendIds(currentUserId));
+        visibleUserIds.add(currentUserId);
+
+        if (visibleUserIds.isEmpty()) {
+            return List.of();
+        }
+
+        Instant fromTime = Instant.now().minusSeconds(STORY_WINDOW_HOURS * 3600L);
+        return momentRepository.findStoryFeedByUserIds(
+                        visibleUserIds,
+                        fromTime,
+                        PageRequest.of(0, normalizeFeedCandidateSize(size)))
+                .stream()
+                .filter(moment -> canViewMoment(moment, currentUserId))
+                .limit(normalizeSize(size))
+                .map(this::toMomentResponse)
+                .toList();
+    }
+
+    @Transactional(readOnly = true)
+    public CommunityVideoFeedResponse getCommunityVideoFeed(String cursor, Integer size) {
+        int limit = normalizeSize(size);
+        CursorData cursorData = decodeCursor(cursor);
+        List<Moment> candidates = momentRepository.findPublicCommunityVideos(
+                cursorData.createdAt,
+                cursorData.momentId,
+                PageRequest.of(0, Math.min(limit * 3, MAX_PAGE_SIZE))
+        );
+
+        UUID currentUserId = currentUser().getUserId();
+        List<Moment> ranked = candidates.stream()
+                .filter(moment -> !isBlockedEitherWay(currentUserId, moment.getUserId()))
+                .sorted((left, right) -> Double.compare(scoreMoment(right), scoreMoment(left)))
+                .limit(limit)
+                .toList();
+
+        String nextCursor = ranked.isEmpty() ? null : encodeCursor(ranked.getLast());
+        boolean hasMore = candidates.size() > ranked.size();
+        return CommunityVideoFeedResponse.builder()
+                .items(ranked.stream().map(this::toMomentResponse).toList())
+                .nextCursor(nextCursor)
+                .hasMore(hasMore)
+                .build();
     }
 
     @Transactional
@@ -382,6 +450,61 @@ public class SocialService {
     }
 
     @Transactional
+    public MomentResponse likeVideo(UUID momentId) {
+        UUID currentUserId = currentUser().getUserId();
+        Moment moment = getInteractableMoment(momentId, currentUserId);
+        if (!momentReactionRepository.existsByMomentIdAndUserId(momentId, currentUserId)) {
+            MomentReaction reaction = new MomentReaction();
+            reaction.setMomentId(momentId);
+            reaction.setUserId(currentUserId);
+            reaction.setReactionType(ReactionType.LIKE);
+            momentReactionRepository.save(reaction);
+        }
+        return toMomentResponse(moment);
+    }
+
+    @Transactional
+    public MomentResponse unlikeVideo(UUID momentId) {
+        UUID currentUserId = currentUser().getUserId();
+        Moment moment = getInteractableMoment(momentId, currentUserId);
+        momentReactionRepository.deleteByMomentIdAndUserId(momentId, currentUserId);
+        return toMomentResponse(moment);
+    }
+
+    @Transactional(readOnly = true)
+    public List<MomentCommentResponse> getMomentComments(UUID momentId) {
+        UUID currentUserId = currentUser().getUserId();
+        Moment moment = getVisibleMoment(momentId, currentUserId);
+        return momentCommentRepository.findByMomentIdAndDeletedAtIsNullOrderByCreatedAtAsc(moment.getId()).stream()
+                .map(this::toMomentCommentResponse)
+                .toList();
+    }
+
+    @Transactional
+    public MomentCommentResponse addMomentComment(UUID momentId, CreateMomentCommentRequest request) {
+        UUID currentUserId = currentUser().getUserId();
+        Moment moment = getInteractableMoment(momentId, currentUserId);
+        MomentComment comment = new MomentComment();
+        comment.setId(UUID.randomUUID());
+        comment.setMomentId(moment.getId());
+        comment.setUserId(currentUserId);
+        comment.setContent(request.getContent().trim());
+        return toMomentCommentResponse(momentCommentRepository.save(comment));
+    }
+
+    @Transactional
+    public void recordMomentView(UUID momentId) {
+        UUID currentUserId = currentUser().getUserId();
+        Moment moment = getVisibleMoment(momentId, currentUserId);
+        if (!momentViewRepository.existsByMomentIdAndViewerId(momentId, currentUserId)) {
+            MomentView view = new MomentView();
+            view.setMomentId(momentId);
+            view.setViewerId(currentUserId);
+            momentViewRepository.save(view);
+        }
+    }
+
+    @Transactional
     public SocialMediaUploadResponse uploadMedia(MultipartFile file) {
         UUID currentUserId = currentUser().getUserId();
         UploadAttachmentResponse upload = s3MediaStorageService.upload(currentUserId, file);
@@ -415,6 +538,30 @@ public class SocialService {
 
         if (!moment.getUserId().equals(currentUserId)) {
             throw new BusinessException("You do not have permission to modify this moment");
+        }
+        return moment;
+    }
+
+    private Moment getVisibleMoment(UUID momentId, UUID currentUserId) {
+        Moment moment = momentRepository.findById(momentId)
+                .filter(item -> item.getDeletedAt() == null)
+                .orElseThrow(() -> new NotFoundException("Moment not found"));
+        if (!canViewMoment(moment, currentUserId)) {
+            throw new NotFoundException("Moment not found");
+        }
+        return moment;
+    }
+
+    private Moment getInteractableMoment(UUID momentId, UUID currentUserId) {
+        Moment moment = getVisibleMoment(momentId, currentUserId);
+        if (moment.getUserId().equals(currentUserId)) {
+            return moment;
+        }
+        if (moment.getVisibilityMode() == MomentVisibilityMode.PUBLIC) {
+            return moment;
+        }
+        if (!areFriends(currentUserId, moment.getUserId())) {
+            throw new BusinessException("You cannot interact with this video");
         }
         return moment;
     }
@@ -524,13 +671,33 @@ public class SocialService {
 
     private MomentResponse toMomentResponse(Moment moment) {
         UserProfile author = userService.getUser(moment.getUserId());
+        UUID currentUserId = currentUser().getUserId();
         return MomentResponse.builder()
                 .id(moment.getId())
                 .author(toUserSummary(author))
                 .mediaUrl(moment.getMediaUrl())
+                .coverUrl(moment.getCoverUrl())
                 .mediaType(moment.getMediaType())
                 .caption(moment.getCaption())
+                .durationSeconds(moment.getDurationSeconds())
+                .visibilityMode(moment.getVisibilityMode())
+                .likeCount(momentReactionRepository.countByMomentId(moment.getId()))
+                .commentCount(momentCommentRepository.countByMomentIdAndDeletedAtIsNull(moment.getId()))
+                .shareCount(moment.getShareCount() == null ? 0L : moment.getShareCount())
+                .viewCount(momentViewRepository.countByMomentId(moment.getId()))
+                .likedByCurrentUser(momentReactionRepository.existsByMomentIdAndUserId(moment.getId(), currentUserId))
+                .followedByCurrentUser(areFriends(currentUserId, moment.getUserId()))
                 .createdAt(moment.getCreatedAt())
+                .build();
+    }
+
+    private MomentCommentResponse toMomentCommentResponse(MomentComment comment) {
+        return MomentCommentResponse.builder()
+                .id(comment.getId())
+                .user(toUserSummary(userService.getUser(comment.getUserId())))
+                .content(comment.getContent())
+                .createdAt(comment.getCreatedAt())
+                .updatedAt(comment.getUpdatedAt())
                 .build();
     }
 
@@ -711,6 +878,20 @@ public class SocialService {
         return postVisibilityGrantRepository.existsByPostIdAndViewerUserId(post.getId(), viewerUserId);
     }
 
+    private boolean canViewMoment(Moment moment, UUID viewerUserId) {
+        if (moment.getUserId().equals(viewerUserId)) {
+            return true;
+        }
+        if (isBlockedEitherWay(moment.getUserId(), viewerUserId)) {
+            return false;
+        }
+        return switch (moment.getVisibilityMode()) {
+            case PUBLIC -> true;
+            case FRIENDS -> areFriends(viewerUserId, moment.getUserId());
+            case PRIVATE -> false;
+        };
+    }
+
     private List<CreatePostMediaItemRequest> validatePostMediaItems(List<CreatePostMediaItemRequest> mediaItems) {
         if (mediaItems == null || mediaItems.isEmpty()) {
             throw new BusinessException("Post must contain at least one image or video");
@@ -787,5 +968,35 @@ public class SocialService {
             return MediaType.VIDEO;
         }
         throw new BusinessException("Only image and video files are supported");
+    }
+
+    private String encodeCursor(Moment moment) {
+        String raw = moment.getCreatedAt().toEpochMilli() + "|" + moment.getId();
+        return Base64.getUrlEncoder().withoutPadding().encodeToString(raw.getBytes(StandardCharsets.UTF_8));
+    }
+
+    private CursorData decodeCursor(String cursor) {
+        if (cursor == null || cursor.isBlank()) {
+            return new CursorData(null, null);
+        }
+        try {
+            String decoded = new String(Base64.getUrlDecoder().decode(cursor), StandardCharsets.UTF_8);
+            String[] parts = decoded.split("\\|", 2);
+            return new CursorData(Instant.ofEpochMilli(Long.parseLong(parts[0])), UUID.fromString(parts[1]));
+        } catch (Exception ex) {
+            throw new BusinessException("Invalid community feed cursor");
+        }
+    }
+
+    private double scoreMoment(Moment moment) {
+        long likes = momentReactionRepository.countByMomentId(moment.getId());
+        long comments = momentCommentRepository.countByMomentIdAndDeletedAtIsNull(moment.getId());
+        long views = momentViewRepository.countByMomentId(moment.getId());
+        long shares = moment.getShareCount() == null ? 0L : moment.getShareCount();
+        long ageHours = Math.max(1L, (Instant.now().toEpochMilli() - moment.getCreatedAt().toEpochMilli()) / (1000L * 60L * 60L));
+        return (likes * 3.0) + (comments * 4.0) + (views * 1.0) + (shares * 5.0) + (48.0 / ageHours);
+    }
+
+    private record CursorData(Instant createdAt, UUID momentId) {
     }
 }

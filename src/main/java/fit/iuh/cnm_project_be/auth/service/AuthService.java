@@ -8,9 +8,12 @@ import fit.iuh.cnm_project_be.auth.dto.response.CheckEmailResponse;
 import fit.iuh.cnm_project_be.auth.dto.response.DeviceLoginQrResponse;
 import fit.iuh.cnm_project_be.auth.dto.response.DeviceLoginStatusResponse;
 import fit.iuh.cnm_project_be.auth.dto.response.LoginResponse;
+import fit.iuh.cnm_project_be.auth.dto.response.LogoutAllDevicesResponse;
 import fit.iuh.cnm_project_be.auth.dto.response.RegisterResponse;
 import fit.iuh.cnm_project_be.auth.dto.response.RefreshTokenResponse;
+import fit.iuh.cnm_project_be.auth.dto.response.SecurityHistoryItemResponse;
 import fit.iuh.cnm_project_be.auth.dto.response.UserDeviceResponseDto;
+import fit.iuh.cnm_project_be.auth.entity.SecurityAuditLog;
 import fit.iuh.cnm_project_be.user.enums.Platform;
 import fit.iuh.cnm_project_be.user.service.UserDeviceService;
 import fit.iuh.cnm_project_be.user.service.UserService;
@@ -56,6 +59,7 @@ public class AuthService {
     UserDeviceService userDeviceService;
     UserService userService;
     TokenRedisService tokenRedisService;
+    SecurityAuditService securityAuditService;
 
     /**
      * Đăng nhập và tạo tokens (access + refresh)
@@ -146,6 +150,9 @@ public class AuthService {
                         .deviceName(device.getDeviceName())
                         .lastSeenAt(device.getLastSeenAt())
                         .createdAt(device.getCreatedAt())
+                        .location("Unknown")
+                        .loginMethod("PASSWORD")
+                        .trustedDevice(Boolean.TRUE)
                         .build())
                 .collect(Collectors.toList());
     }
@@ -172,6 +179,14 @@ public class AuthService {
         }
 
         log.info("[Device Logout] - User {} logged out from device {} on platform {}", userId, normalizedDeviceId, normalizedPlatform);
+        securityAuditService.log(
+                userId,
+                "DEVICE_LOGOUT_SINGLE",
+                "Da dang xuat 1 thiet bi",
+                "Da dang xuat thiet bi " + normalizedDeviceId + " tren nen tang " + normalizedPlatform,
+                normalizedDeviceId,
+                normalizedPlatform
+        );
 
         try {
             String topicName = "/topic/auth/" + userId + "/device-logout";
@@ -187,6 +202,49 @@ public class AuthService {
         } catch (Exception e) {
             log.error("[WebSocket] - Error sending logout notification: {}", e.getMessage(), e);
         }
+    }
+
+    public LogoutAllDevicesResponse logoutAllDevices(UUID userId) {
+        int deviceCount = userDeviceService.getUserDeviceByUserId(userId).size();
+        tokenRedisService.deleteRefreshTokensByScope(userId, "web");
+        tokenRedisService.deleteRefreshTokensByScope(userId, "android");
+        tokenRedisService.deleteRefreshTokensByScope(userId, "ios");
+        userDeviceService.deleteAllDevices(userId);
+        userService.updateFcmToken(userId, null);
+
+        securityAuditService.log(
+                userId,
+                "DEVICE_LOGOUT_ALL",
+                "Da dang xuat tat ca thiet bi",
+                "Tat ca cac phien dang nhap da duoc thu hoi o cap refresh token va danh sach thiet bi",
+                null,
+                null
+        );
+
+        return LogoutAllDevicesResponse.builder()
+                .loggedOutDeviceCount(deviceCount)
+                .currentSessionMayRemainUntilExpiry(true)
+                .message("All remembered devices were signed out. The current access token may remain valid until it expires.")
+                .build();
+    }
+
+    public List<SecurityHistoryItemResponse> getLogoutHistory(UUID userId, Integer size) {
+        int resolvedSize = size == null || size <= 0 ? 50 : Math.min(size, 200);
+        return securityAuditService.getLogoutHistory(userId, resolvedSize).stream()
+                .map(this::toSecurityHistoryItem)
+                .toList();
+    }
+
+    private SecurityHistoryItemResponse toSecurityHistoryItem(SecurityAuditLog log) {
+        return SecurityHistoryItemResponse.builder()
+                .id(log.getId())
+                .eventType(log.getEventType())
+                .title(log.getTitle())
+                .detail(log.getDetail())
+                .deviceId(log.getDeviceId())
+                .platform(log.getPlatform())
+                .createdAt(log.getCreatedAt())
+                .build();
     }
 }
 

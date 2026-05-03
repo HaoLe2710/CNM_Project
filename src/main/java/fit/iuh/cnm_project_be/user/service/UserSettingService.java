@@ -38,6 +38,24 @@ public class UserSettingService {
         return buildResponse(persistedSettings);
     }
 
+    @Transactional(readOnly = true)
+    public Map<String, Object> getMySection(String section) {
+        UUID userId = userService.getCurrentUserId();
+        return getSection(userId, section);
+    }
+
+    @Transactional(readOnly = true)
+    public Map<String, Object> getSection(UUID userId, String section) {
+        String normalizedSection = normalizeSection(section);
+        Map<String, Object> defaults = cloneDefaults();
+        @SuppressWarnings("unchecked")
+        Map<String, Object> baseSection = (Map<String, Object>) defaults.get(normalizedSection);
+
+        return userSettingRepository.findByUserIdAndKey(userId, normalizedSection)
+                .map(setting -> deepMerge(baseSection, readJsonObject(setting.getValue())))
+                .orElseGet(() -> objectMapper.convertValue(baseSection, MAP_TYPE_REFERENCE));
+    }
+
     @Transactional
     public UserSettingsResponse updateMySettings(Map<String, Object> partialSettings) {
         if (partialSettings == null || partialSettings.isEmpty()) {
@@ -68,6 +86,33 @@ public class UserSettingService {
         }
 
         return buildResponse(List.copyOf(existingByKey.values()));
+    }
+
+    @Transactional
+    public Map<String, Object> updateMySection(String section, Map<String, Object> partialSection) {
+        UUID userId = userService.getCurrentUserId();
+        return updateSection(userId, section, partialSection);
+    }
+
+    @Transactional
+    public Map<String, Object> updateSection(UUID userId, String section, Map<String, Object> partialSection) {
+        String normalizedSection = normalizeSection(section);
+        Map<String, Object> normalizedValue = normalizeSectionValue(normalizedSection, partialSection);
+        Map<String, Object> currentSection = getSection(userId, normalizedSection);
+        Map<String, Object> mergedSection = deepMerge(currentSection, normalizedValue);
+
+        UserSetting setting = userSettingRepository.findByUserIdAndKey(userId, normalizedSection)
+                .orElseGet(() -> {
+                    UserSetting createdSetting = new UserSetting();
+                    createdSetting.setUserId(userId);
+                    createdSetting.setKey(normalizedSection);
+                    return createdSetting;
+                });
+
+        setting.setValue(writeJson(mergedSection));
+        setting.setUpdatedAt(Instant.now());
+        userSettingRepository.save(setting);
+        return mergedSection;
     }
 
     private UserSettingsResponse buildResponse(List<UserSetting> persistedSettings) {
@@ -194,6 +239,12 @@ public class UserSettingService {
                 "requireDeviceApproval", true,
                 "twoFactorAuthEnabled", false
         ));
+        defaults.put("zaloLock", mapOf(
+                "enabled", false,
+                "method", "NONE",
+                "pinConfigured", false,
+                "biometricEnabled", false
+        ));
         defaults.put("personal", mapOf(
                 "saveMediaFromZalo", true
         ));
@@ -234,7 +285,10 @@ public class UserSettingService {
         ));
         defaults.put("contacts", mapOf(
                 "syncPhoneContacts", true,
-                "suggestFriendsFromContacts", true
+                "suggestFriendsFromContacts", true,
+                "lastSyncedAt", null,
+                "searchableByPhone", true,
+                "searchableByEmail", true
         ));
         defaults.put("appearance", mapOf(
                 "theme", "SYSTEM",
