@@ -1,6 +1,7 @@
 package fit.iuh.cnm_project_be.social.dto.request;
 
 import fit.iuh.cnm_project_be.social.enums.MediaType;
+import fit.iuh.cnm_project_be.social.enums.MomentAudioMode;
 import fit.iuh.cnm_project_be.social.enums.MomentVisibilityMode;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
@@ -24,4 +25,16 @@ public class CreateMomentRequest {
     private Integer durationSeconds;
 
     private MomentVisibilityMode visibilityMode;
+
+    private MomentAudioMode audioMode;
+
+    private String musicTrackId;
+
+    private String musicTitle;
+
+    private String musicArtist;
+
+    private String musicUrl;
+
+    private Integer musicStartSeconds;
 }

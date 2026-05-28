@@ -23,4 +23,6 @@ public interface SecurityAuditLogRepository extends BaseRepository<SecurityAudit
             String eventTypePrefix,
             Pageable pageable
     );
+
+    List<SecurityAuditLog> findAllByOrderByCreatedAtDesc(Pageable pageable);
 }
