@@ -31,6 +31,7 @@ import fit.iuh.cnm_project_be.social.entity.PostVisibilityGrant;
 import fit.iuh.cnm_project_be.social.entity.MomentReaction;
 import fit.iuh.cnm_project_be.social.entity.MomentView;
 import fit.iuh.cnm_project_be.social.enums.MediaType;
+import fit.iuh.cnm_project_be.social.enums.MomentAudioMode;
 import fit.iuh.cnm_project_be.social.enums.MomentVisibilityMode;
 import fit.iuh.cnm_project_be.social.enums.PostInteractionScope;
 import fit.iuh.cnm_project_be.social.enums.PostVisibilityMode;
@@ -321,6 +322,7 @@ public class SocialService {
     @Transactional
     public MomentResponse createMoment(CreateMomentRequest request) {
         UserProfile currentUser = currentUser();
+        MomentAudioSelection audioSelection = resolveAndValidateMomentAudio(request);
 
         Moment moment = new Moment();
         moment.setUserId(currentUser.getUserId());
@@ -330,6 +332,12 @@ public class SocialService {
         moment.setCoverUrl(trimToNull(request.getCoverUrl()));
         moment.setDurationSeconds(request.getDurationSeconds() == null ? 0 : Math.max(request.getDurationSeconds(), 0));
         moment.setVisibilityMode(request.getVisibilityMode() == null ? MomentVisibilityMode.FRIENDS : request.getVisibilityMode());
+        moment.setAudioMode(audioSelection.audioMode());
+        moment.setMusicTrackId(audioSelection.musicTrackId());
+        moment.setMusicTitle(audioSelection.musicTitle());
+        moment.setMusicArtist(audioSelection.musicArtist());
+        moment.setMusicUrl(audioSelection.musicUrl());
+        moment.setMusicStartSeconds(audioSelection.musicStartSeconds());
 
         return toMomentResponse(momentRepository.save(moment));
     }
@@ -681,6 +689,12 @@ public class SocialService {
                 .caption(moment.getCaption())
                 .durationSeconds(moment.getDurationSeconds())
                 .visibilityMode(moment.getVisibilityMode())
+                .audioMode(moment.getAudioMode())
+                .musicTrackId(moment.getMusicTrackId())
+                .musicTitle(moment.getMusicTitle())
+                .musicArtist(moment.getMusicArtist())
+                .musicUrl(moment.getMusicUrl())
+                .musicStartSeconds(moment.getMusicStartSeconds())
                 .likeCount(momentReactionRepository.countByMomentId(moment.getId()))
                 .commentCount(momentCommentRepository.countByMomentIdAndDeletedAtIsNull(moment.getId()))
                 .shareCount(moment.getShareCount() == null ? 0L : moment.getShareCount())
@@ -960,6 +974,47 @@ public class SocialService {
         return trimmed.isEmpty() ? null : trimmed;
     }
 
+    private MomentAudioSelection resolveAndValidateMomentAudio(CreateMomentRequest request) {
+        MomentAudioMode mode = request.getAudioMode() == null ? defaultAudioModeFor(request.getMediaType()) : request.getAudioMode();
+        int startSeconds = request.getMusicStartSeconds() == null ? 0 : Math.max(request.getMusicStartSeconds(), 0);
+        String musicUrl = trimToNull(request.getMusicUrl());
+        String musicTrackId = trimToNull(request.getMusicTrackId());
+        String musicTitle = trimToNull(request.getMusicTitle());
+        String musicArtist = trimToNull(request.getMusicArtist());
+
+        if (request.getMediaType() == MediaType.IMAGE) {
+            if (mode == MomentAudioMode.ORIGINAL || mode == MomentAudioMode.MUTED) {
+                throw new BusinessException("Image story only supports NONE or REPLACED audio mode");
+            }
+            if (mode == MomentAudioMode.REPLACED && musicUrl == null) {
+                throw new BusinessException("musicUrl is required when replacing audio");
+            }
+        }
+
+        if (request.getMediaType() == MediaType.VIDEO) {
+            if (mode == MomentAudioMode.NONE) {
+                throw new BusinessException("Video story does not support NONE audio mode");
+            }
+            if (mode == MomentAudioMode.REPLACED && musicUrl == null) {
+                throw new BusinessException("musicUrl is required when replacing audio");
+            }
+        }
+
+        if (mode != MomentAudioMode.REPLACED) {
+            musicUrl = null;
+            musicTrackId = null;
+            musicTitle = null;
+            musicArtist = null;
+            startSeconds = 0;
+        }
+
+        return new MomentAudioSelection(mode, musicTrackId, musicTitle, musicArtist, musicUrl, startSeconds);
+    }
+
+    private MomentAudioMode defaultAudioModeFor(MediaType mediaType) {
+        return mediaType == MediaType.VIDEO ? MomentAudioMode.ORIGINAL : MomentAudioMode.NONE;
+    }
+
     private MediaType toMediaType(MessageType messageType) {
         if (messageType == MessageType.IMAGE) {
             return MediaType.IMAGE;
@@ -995,6 +1050,16 @@ public class SocialService {
         long shares = moment.getShareCount() == null ? 0L : moment.getShareCount();
         long ageHours = Math.max(1L, (Instant.now().toEpochMilli() - moment.getCreatedAt().toEpochMilli()) / (1000L * 60L * 60L));
         return (likes * 3.0) + (comments * 4.0) + (views * 1.0) + (shares * 5.0) + (48.0 / ageHours);
+    }
+
+    private record MomentAudioSelection(
+            MomentAudioMode audioMode,
+            String musicTrackId,
+            String musicTitle,
+            String musicArtist,
+            String musicUrl,
+            Integer musicStartSeconds
+    ) {
     }
 
     private record CursorData(Instant createdAt, UUID momentId) {

@@ -1,6 +1,7 @@
 package fit.iuh.cnm_project_be.social.entity;
 
 import fit.iuh.cnm_project_be.common.entity.BaseEntity;
+import fit.iuh.cnm_project_be.social.enums.MomentAudioMode;
 import fit.iuh.cnm_project_be.social.enums.MediaType;
 import fit.iuh.cnm_project_be.social.enums.MomentVisibilityMode;
 import jakarta.persistence.*;
@@ -44,4 +45,23 @@ public class Moment extends BaseEntity {
 
     @Column(name = "share_count", nullable = false)
     private Long shareCount = 0L;
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "audio_mode", nullable = false)
+    private MomentAudioMode audioMode = MomentAudioMode.NONE;
+
+    @Column(name = "music_track_id")
+    private String musicTrackId;
+
+    @Column(name = "music_title")
+    private String musicTitle;
+
+    @Column(name = "music_artist")
+    private String musicArtist;
+
+    @Column(name = "music_url")
+    private String musicUrl;
+
+    @Column(name = "music_start_seconds", nullable = false)
+    private Integer musicStartSeconds = 0;
 }

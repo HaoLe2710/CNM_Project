@@ -1,6 +1,7 @@
 package fit.iuh.cnm_project_be.social.dto.response;
 
 import fit.iuh.cnm_project_be.social.enums.MediaType;
+import fit.iuh.cnm_project_be.social.enums.MomentAudioMode;
 import fit.iuh.cnm_project_be.social.enums.MomentVisibilityMode;
 import fit.iuh.cnm_project_be.user.dto.response.UserSummaryResponse;
 import lombok.Builder;
@@ -21,6 +22,12 @@ public class MomentResponse {
     private String caption;
     private Integer durationSeconds;
     private MomentVisibilityMode visibilityMode;
+    private MomentAudioMode audioMode;
+    private String musicTrackId;
+    private String musicTitle;
+    private String musicArtist;
+    private String musicUrl;
+    private Integer musicStartSeconds;
     private long likeCount;
     private long commentCount;
     private long shareCount;

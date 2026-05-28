@@ -4,6 +4,7 @@ import fit.iuh.cnm_project_be.system.enums.ReportTargetType;
 import jakarta.persistence.*;
 import lombok.Getter;
 import lombok.Setter;
+import org.hibernate.annotations.ColumnTransformer;
 
 import java.time.Instant;
 import java.util.UUID;
@@ -29,6 +30,7 @@ public class Report {
     private String reason;
 
     @Column(columnDefinition = "jsonb")
+    @ColumnTransformer(write = "?::jsonb")
     private String aiAnalysis;
 
     private String actionTaken;
