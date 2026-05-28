@@ -2,6 +2,10 @@ package fit.iuh.cnm_project_be.user.service;
 
 import fit.iuh.cnm_project_be.common.exception.BusinessException;
 import fit.iuh.cnm_project_be.common.exception.NotFoundException;
+import fit.iuh.cnm_project_be.notification.dto.NotificationDispatchRequest;
+import fit.iuh.cnm_project_be.notification.enums.NotificationTargetType;
+import fit.iuh.cnm_project_be.notification.enums.NotificationType;
+import fit.iuh.cnm_project_be.notification.service.NotificationDispatcher;
 import fit.iuh.cnm_project_be.user.dto.response.FriendRequestResponse;
 import fit.iuh.cnm_project_be.user.dto.response.FriendshipResponse;
 import fit.iuh.cnm_project_be.user.dto.response.UserSearchResponse;
@@ -16,16 +20,19 @@ import fit.iuh.cnm_project_be.user.repository.FriendshipRepository;
 import fit.iuh.cnm_project_be.user.repository.UserBlockRepository;
 import fit.iuh.cnm_project_be.user.repository.UserProfileRepository;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 
 @Service
 @RequiredArgsConstructor
+@Slf4j
 public class FriendService {
     private static final int SEARCH_LIMIT = 20;
 
@@ -35,6 +42,7 @@ public class FriendService {
     private final FriendshipRepository friendshipRepository;
     private final UserBlockRepository userBlockRepository;
     private final FriendMapper friendMapper;
+    private final NotificationDispatcher notificationDispatcher;
 
 
 //    Tìm user
@@ -91,7 +99,9 @@ public class FriendService {
         request.setCreatedAt(Instant.now());
         request.setUpdatedAt(Instant.now());
 
-        return friendMapper.toRequestResponse(friendRequestRepository.save(request), sender, receiver);
+        FriendRequest savedRequest = friendRequestRepository.save(request);
+        safeDispatchFriendRequestReceived(savedRequest, sender, receiver);
+        return friendMapper.toRequestResponse(savedRequest, sender, receiver);
     }
 
 //    Lấy danh sách lời mời kết bạn đến
@@ -146,6 +156,7 @@ public class FriendService {
             friendshipRepository.save(buildFriendship(request.getSenderId(), request.getReceiverId()));
             friendshipRepository.save(buildFriendship(request.getReceiverId(), request.getSenderId()));
         }
+        safeDispatchFriendRequestAccepted(savedRequest, currentUser, userService.getUser(savedRequest.getSenderId()));
 
         return friendMapper.toRequestResponse(
                 savedRequest,
@@ -226,6 +237,73 @@ public class FriendService {
         friendship.setUserId(userId);
         friendship.setFriendId(friendId);
         return friendship;
+    }
+
+    private void safeDispatchFriendRequestReceived(
+            FriendRequest request,
+            UserProfile sender,
+            UserProfile receiver) {
+        if (notificationDispatcher == null || request == null || sender == null || receiver == null) {
+            return;
+        }
+        try {
+            notificationDispatcher.dispatch(NotificationDispatchRequest.builder()
+                    .type(NotificationType.FRIEND_REQUEST_RECEIVED)
+                    .targetType(NotificationTargetType.FRIEND_REQUEST)
+                    .actorId(sender.getUserId())
+                    .explicitRecipientIds(List.of(receiver.getUserId()))
+                    .metadata(Map.of(
+                            "actorName", displayName(sender),
+                            "friendRequestId", String.valueOf(request.getId())
+                    ))
+                    .dedupKeyPrefix("friend_request:" + request.getId())
+                    .recipientDirectlyAffected(true)
+                    .build());
+        } catch (Exception ex) {
+            log.warn("[FriendService] Notification dispatch failed for friend request {}: {}",
+                    request.getId(),
+                    ex.getMessage());
+        }
+    }
+
+    private void safeDispatchFriendRequestAccepted(
+            FriendRequest request,
+            UserProfile accepter,
+            UserProfile originalSender) {
+        if (notificationDispatcher == null || request == null || accepter == null || originalSender == null) {
+            return;
+        }
+        try {
+            notificationDispatcher.dispatch(NotificationDispatchRequest.builder()
+                    .type(NotificationType.FRIEND_REQUEST_ACCEPTED)
+                    .targetType(NotificationTargetType.FRIEND_REQUEST)
+                    .actorId(accepter.getUserId())
+                    .explicitRecipientIds(List.of(originalSender.getUserId()))
+                    .metadata(Map.of(
+                            "actorName", displayName(accepter),
+                            "friendRequestId", String.valueOf(request.getId())
+                    ))
+                    .dedupKeyPrefix("friend_request:" + request.getId() + ":accepted")
+                    .recipientDirectlyAffected(true)
+                    .build());
+        } catch (Exception ex) {
+            log.warn("[FriendService] Notification dispatch failed for accepted friend request {}: {}",
+                    request.getId(),
+                    ex.getMessage());
+        }
+    }
+
+    private String displayName(UserProfile userProfile) {
+        if (userProfile == null) {
+            return "Ai đó";
+        }
+        if (userProfile.getDisplayName() != null && !userProfile.getDisplayName().isBlank()) {
+            return userProfile.getDisplayName();
+        }
+        if (userProfile.getUsername() != null && !userProfile.getUsername().isBlank()) {
+            return userProfile.getUsername();
+        }
+        return "Ai đó";
     }
 
     @Transactional

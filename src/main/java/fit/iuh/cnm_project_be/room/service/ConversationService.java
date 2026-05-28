@@ -250,12 +250,31 @@ public class ConversationService {
     public void updateMutePreference(UUID conversationId, UUID actorUserId, boolean muted) {
         Conversation conversation = getConversationOrThrow(conversationId);
         ensureConversationMember(conversationId, actorUserId);
-        updateUserSetting(
-                conversation.getId(),
-                actorUserId,
-                muted,
-                ConversationUserSetting::getMutedAt,
-                ConversationUserSetting::setMutedAt);
+        ConversationUserSetting setting = conversationUserSettingRepository
+                .findByConversationIdAndUserId(conversation.getId(), actorUserId)
+                .orElse(null);
+
+        if (setting == null && !muted) {
+            return;
+        }
+        if (setting == null) {
+            setting = new ConversationUserSetting();
+            setting.setConversationId(conversation.getId());
+            setting.setUserId(actorUserId);
+        }
+
+        if (muted) {
+            Instant now = Instant.now();
+            setting.setMutedAt(now);
+            setting.setLastMutedAt(now);
+        } else {
+            setting.setMutedAt(null);
+            setting.setMutedUntil(null);
+            if (setting.getNotificationLevel() == ConversationNotificationLevel.NONE) {
+                setting.setNotificationLevel(ConversationNotificationLevel.ALL);
+            }
+        }
+        conversationUserSettingRepository.save(setting);
     }
 
     @Transactional
@@ -304,7 +323,15 @@ public class ConversationService {
             setting.setUserId(actorUserId);
         }
 
-        setting.setNotificationLevel(normalizedLevel == ConversationNotificationLevel.ALL ? null : normalizedLevel);
+        setting.setNotificationLevel(normalizedLevel);
+        if (normalizedLevel == ConversationNotificationLevel.NONE) {
+            Instant now = Instant.now();
+            setting.setMutedAt(now);
+            setting.setLastMutedAt(now);
+        } else if (normalizedLevel == ConversationNotificationLevel.ALL) {
+            setting.setMutedAt(null);
+            setting.setMutedUntil(null);
+        }
         conversationUserSettingRepository.save(setting);
     }
 
@@ -474,7 +501,7 @@ public class ConversationService {
                 .lastMessage(lastMsg != null ? lastMsg.getContent() : "")
                 .lastMessageTime(lastMsg != null ? lastMsg.getCreatedAt() : conv.getCreatedAt())
                 .unreadCount(unreadCount)
-                .muted(setting != null && setting.getMutedAt() != null)
+                .muted(isMuted(setting))
                 .archived(setting != null && setting.getArchivedAt() != null)
                 .pinned(setting != null && setting.getPinnedAt() != null)
                 .notificationLevel(resolveNotificationLevel(setting))
@@ -737,6 +764,20 @@ public class ConversationService {
         return setting != null && setting.getNotificationLevel() != null
                 ? setting.getNotificationLevel()
                 : ConversationNotificationLevel.ALL;
+    }
+
+    private boolean isMuted(ConversationUserSetting setting) {
+        if (setting == null) {
+            return false;
+        }
+        ConversationNotificationLevel notificationLevel = resolveNotificationLevel(setting);
+        if (notificationLevel == ConversationNotificationLevel.NONE) {
+            return true;
+        }
+        if (setting.getMutedUntil() != null) {
+            return setting.getMutedUntil().isAfter(Instant.now());
+        }
+        return setting.getMutedAt() != null;
     }
 
     private boolean shouldDeliverConversationRefresh(ConversationUserSetting setting) {

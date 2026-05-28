@@ -18,6 +18,10 @@ import fit.iuh.cnm_project_be.message.repository.MessageStatusRepository;
 import fit.iuh.cnm_project_be.message.repository.MessageUserStateRepository;
 import fit.iuh.cnm_project_be.message.entity.MessageStatus;
 import fit.iuh.cnm_project_be.message.entity.MessageUserState;
+import fit.iuh.cnm_project_be.notification.dto.NotificationDispatchRequest;
+import fit.iuh.cnm_project_be.notification.enums.NotificationTargetType;
+import fit.iuh.cnm_project_be.notification.enums.NotificationType;
+import fit.iuh.cnm_project_be.notification.service.NotificationDispatcher;
 import fit.iuh.cnm_project_be.realtime.dto.RealtimeEvent;
 import fit.iuh.cnm_project_be.realtime.dto.RealtimeEventType;
 import fit.iuh.cnm_project_be.room.repository.ConversationRepository;
@@ -51,6 +55,7 @@ public class GroupCallService {
     private final MessageStatusRepository messageStatusRepository;
     private final MessageUserStateRepository messageUserStateRepository;
     private final ObjectMapper objectMapper;
+    private final NotificationDispatcher notificationDispatcher;
 
     public GroupCallService(
             GroupCallRepository groupCallRepository,
@@ -61,7 +66,8 @@ public class GroupCallService {
             MessageRepository messageRepository,
             MessageStatusRepository messageStatusRepository,
             MessageUserStateRepository messageUserStateRepository,
-            ObjectMapper objectMapper) {
+            ObjectMapper objectMapper,
+            NotificationDispatcher notificationDispatcher) {
         this.groupCallRepository = groupCallRepository;
         this.participantRepository = participantRepository;
         this.conversationMemberRepository = conversationMemberRepository;
@@ -71,6 +77,7 @@ public class GroupCallService {
         this.messageStatusRepository = messageStatusRepository;
         this.messageUserStateRepository = messageUserStateRepository;
         this.objectMapper = objectMapper;
+        this.notificationDispatcher = notificationDispatcher;
     }
 
     @Value("${app.sfu.url}")
@@ -163,6 +170,7 @@ public class GroupCallService {
         } catch (Exception e) {
             log.error("[GroupCallService] ❌ Failed to send GROUP_CALL_INCOMING signal: {}", e.getMessage());
         }
+        safeDispatchGroupCallStartedNotification(groupCall, initiatorId, initiatorName, channel, currentSfuUrl, members);
 
         // --- LƯU TIN NHẮN CALL_LOG VÀO LỊCH SỬ CHAT (Cô lập lỗi) ---
         try {
@@ -235,6 +243,91 @@ public class GroupCallService {
                 GroupCallStatus.RINGING,
                 request.type()
         );
+    }
+
+    private void safeDispatchGroupCallStartedNotification(
+            GroupCall groupCall,
+            UUID initiatorId,
+            String initiatorName,
+            String channel,
+            String currentSfuUrl,
+            List<ConversationMember> members) {
+        if (notificationDispatcher == null) {
+            return;
+        }
+        try {
+            List<UUID> recipients = members.stream()
+                    .map(ConversationMember::getUserId)
+                    .filter(userId -> !userId.equals(initiatorId))
+                    .distinct()
+                    .toList();
+            if (recipients.isEmpty()) {
+                return;
+            }
+            notificationDispatcher.dispatch(NotificationDispatchRequest.builder()
+                    .type(NotificationType.GROUP_CALL_STARTED)
+                    .targetType(NotificationTargetType.CALL)
+                    .targetId(groupCall.getId())
+                    .actorId(initiatorId)
+                    .explicitRecipientIds(recipients)
+                    .conversationId(groupCall.getConversationId())
+                    .metadata(Map.of(
+                            "actorName", initiatorName,
+                            "conversationName", "Cuộc gọi nhóm",
+                            "groupCallId", groupCall.getId().toString(),
+                            "channel", channel,
+                            "sfuUrl", currentSfuUrl,
+                            "callType", groupCall.getType() != null ? groupCall.getType().name() : ""
+                    ))
+                    .dedupKeyPrefix("group-call:" + groupCall.getId() + ":started")
+                    .recipientDirectlyAffected(true)
+                    .build());
+        } catch (Exception ex) {
+            log.warn("[GroupCallService] Notification dispatch failed for groupCallId={}: {}",
+                    groupCall.getId(),
+                    ex.getMessage());
+        }
+    }
+
+    private void safeDispatchMissedGroupCallNotification(GroupCall groupCall) {
+        if (notificationDispatcher == null || groupCall == null) {
+            return;
+        }
+        try {
+            List<UUID> recipients = participantRepository.findByGroupCallId(groupCall.getId()).stream()
+                    .filter(participant -> participant.getState() == ParticipantState.INVITED
+                            && participant.getJoinCount() == 0
+                            && !participant.getUserId().equals(groupCall.getInitiatorId()))
+                    .map(GroupCallParticipant::getUserId)
+                    .distinct()
+                    .toList();
+            if (recipients.isEmpty()) {
+                return;
+            }
+            String initiatorName = userProfileRepository.findById(groupCall.getInitiatorId())
+                    .map(UserProfile::getDisplayName)
+                    .orElse("Ai đó");
+            notificationDispatcher.dispatch(NotificationDispatchRequest.builder()
+                    .type(NotificationType.MISSED_GROUP_CALL)
+                    .targetType(NotificationTargetType.CALL)
+                    .targetId(groupCall.getId())
+                    .actorId(groupCall.getInitiatorId())
+                    .explicitRecipientIds(recipients)
+                    .conversationId(groupCall.getConversationId())
+                    .metadata(Map.of(
+                            "actorName", initiatorName,
+                            "conversationName", "Cuộc gọi nhóm",
+                            "groupCallId", groupCall.getId().toString(),
+                            "callType", groupCall.getType() != null ? groupCall.getType().name() : ""
+                    ))
+                    .dedupKeyPrefix("group-call:" + groupCall.getId() + ":missed")
+                    .recipientDirectlyAffected(true)
+                    .build());
+        } catch (Exception ex) {
+            log.warn("[GroupCallService] Notification dispatch failed for missed groupCallId={}: {}",
+                    groupCall.getId(),
+                    ex.getMessage());
+        }
     }
 
     /**
@@ -431,6 +524,9 @@ public class GroupCallService {
             if (!hasActiveParticipant || isRingingTooLong) {
                 log.info("[GroupCallService-Cleanup] Call {} ended. Active participants: {}, Timeout RINGING: {}", 
                         call.getId(), hasActiveParticipant, isRingingTooLong);
+                if (isRingingTooLong) {
+                    safeDispatchMissedGroupCallNotification(call);
+                }
                 endGroupCall(call.getId());
             }
         }

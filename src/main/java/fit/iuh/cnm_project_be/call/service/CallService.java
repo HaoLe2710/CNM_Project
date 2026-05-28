@@ -13,6 +13,11 @@ import fit.iuh.cnm_project_be.message.enums.MessageType;
 import fit.iuh.cnm_project_be.message.repository.MessageRepository;
 import fit.iuh.cnm_project_be.message.repository.MessageStatusRepository;
 import fit.iuh.cnm_project_be.message.repository.MessageUserStateRepository;
+import fit.iuh.cnm_project_be.notification.dto.NotificationDispatchRequest;
+import fit.iuh.cnm_project_be.notification.dto.NotificationDispatchResult;
+import fit.iuh.cnm_project_be.notification.enums.NotificationTargetType;
+import fit.iuh.cnm_project_be.notification.enums.NotificationType;
+import fit.iuh.cnm_project_be.notification.service.NotificationDispatcher;
 import fit.iuh.cnm_project_be.realtime.dto.RealtimeEvent;
 import fit.iuh.cnm_project_be.realtime.dto.RealtimeEventType;
 import fit.iuh.cnm_project_be.room.entity.Conversation;
@@ -49,6 +54,7 @@ public class CallService {
     private final MessageStatusRepository messageStatusRepository;
     private final MessageUserStateRepository messageUserStateRepository;
     private final ObjectMapper objectMapper;
+    private final NotificationDispatcher notificationDispatcher;
 
     public CallService(
             CallRepository callRepository,
@@ -60,7 +66,8 @@ public class CallService {
             MessageRepository messageRepository,
             MessageStatusRepository messageStatusRepository,
             MessageUserStateRepository messageUserStateRepository,
-            ObjectMapper objectMapper) {
+            ObjectMapper objectMapper,
+            NotificationDispatcher notificationDispatcher) {
         this.callRepository = callRepository;
         this.userProfileRepository = userProfileRepository;
         this.fcmService = fcmService;
@@ -71,6 +78,7 @@ public class CallService {
         this.messageStatusRepository = messageStatusRepository;
         this.messageUserStateRepository = messageUserStateRepository;
         this.objectMapper = objectMapper;
+        this.notificationDispatcher = notificationDispatcher;
     }
 
     @Value("${app.sfu.url}")
@@ -139,12 +147,22 @@ public class CallService {
             log.error("[CallService] ❌ Failed to send STOMP signal to {}: {}", request.calleeId(), e.getMessage());
         }
 
-        // 3. FCM: Gửi Push Notification (Để đánh thức app khi đang đóng)
+        // 3. Notification dispatcher: policy -> in-app -> device-token push.
+        NotificationDispatchResult notificationResult = safeDispatchIncomingCallNotification(
+                call,
+                callerId,
+                request.calleeId(),
+                callerName,
+                channel,
+                currentSfuUrl);
+
         String fcmToken = userProfileRepository.findById(request.calleeId())
                 .map(UserProfile::getFcmToken)
                 .orElse(null);
 
-        if (fcmToken != null && !fcmToken.trim().isEmpty()) {
+        boolean policyAllowed = notificationResult != null && notificationResult.wasPolicyAllowedFor(request.calleeId());
+        boolean hasDevicePushSuccess = notificationResult != null && notificationResult.hasPushSuccess();
+        if (policyAllowed && !hasDevicePushSuccess && fcmToken != null && !fcmToken.trim().isEmpty()) {
             try {
                 fcmService.sendCallNotification(
                         fcmToken,
@@ -152,7 +170,7 @@ public class CallService {
                         call.getId().toString(),
                         channel
                 );
-                log.info("[CallService] FCM Notification sent to {}", request.calleeId());
+                log.info("[CallService] Legacy FCM notification sent to {}", request.calleeId());
             } catch (Exception e) {
                 log.warn("[CallService] FCM failed (silent fallback to STOMP): {}", e.getMessage());
             }
@@ -160,6 +178,48 @@ public class CallService {
 
         // Trả cho người gọi thông tin kết nối SFU
         return new CallResponse(call.getId(), channel, currentSfuUrl);
+    }
+
+    private NotificationDispatchResult safeDispatchIncomingCallNotification(
+            Call call,
+            UUID callerId,
+            UUID calleeId,
+            String callerName,
+            String channel,
+            String currentSfuUrl) {
+        if (notificationDispatcher == null) {
+            return null;
+        }
+        try {
+            NotificationDispatchResult result = notificationDispatcher.dispatch(NotificationDispatchRequest.builder()
+                    .type(NotificationType.INCOMING_PRIVATE_CALL)
+                    .targetType(NotificationTargetType.CALL)
+                    .targetId(call.getId())
+                    .actorId(callerId)
+                    .explicitRecipientIds(List.of(calleeId))
+                    .metadata(Map.of(
+                            "actorName", callerName,
+                            "callId", call.getId().toString(),
+                            "roomId", channel,
+                            "sfuUrl", currentSfuUrl,
+                            "callType", call.getType() != null ? call.getType().name() : ""
+                    ))
+                    .dedupKeyPrefix("call:" + call.getId() + ":incoming")
+                    .recipientDirectlyAffected(true)
+                    .build());
+            if (result.hasPushSuccess()) {
+                log.info("[CallService] Push sent via notification dispatcher to {} successCount={}",
+                        calleeId,
+                        result.getPushSuccessCount());
+            }
+            return result;
+        } catch (Exception ex) {
+            log.warn("[CallService] Notification dispatch failed for incoming call callId={} calleeId={}: {}",
+                    call.getId(),
+                    calleeId,
+                    ex.getMessage());
+            return null;
+        }
     }
 
     /**
@@ -239,17 +299,21 @@ public class CallService {
      */
     public void endCall(UUID callId, UUID userId) {
         Call call = callRepository.findById(callId).orElseThrow();
-        call.setStatus(CallStatus.ENDED);
+        boolean missedByCallee = call.getStatus() == CallStatus.RINGING && call.getCallerId().equals(userId);
+        call.setStatus(missedByCallee ? CallStatus.MISSED : CallStatus.ENDED);
         call.setEndedAt(Instant.now());
         callRepository.save(call);
         persistPrivateCallLog(call, userId);
+        if (missedByCallee) {
+            safeDispatchMissedPrivateCallNotification(call);
+        }
 
         // Xác định người đối diện để thông báo
         UUID otherUserId = call.getCallerId().equals(userId) ? call.getCalleeId() : call.getCallerId();
 
         Map<String, Object> stompPayload = new HashMap<>();
         stompPayload.put("callId", call.getId());
-        stompPayload.put("status", "ENDED");
+        stompPayload.put("status", call.getStatus().name());
 
         Map<String, Object> stompEvent = new HashMap<>();
         stompEvent.put("type", "CALL_ENDED");
@@ -260,6 +324,36 @@ public class CallService {
                 (Object) stompEvent
         );
         log.info("Đã gửi STOMP CALL_ENDED tới đối phương: {}", otherUserId);
+    }
+
+    private void safeDispatchMissedPrivateCallNotification(Call call) {
+        if (notificationDispatcher == null || call == null || call.getCalleeId() == null) {
+            return;
+        }
+        try {
+            String callerName = userProfileRepository.findById(call.getCallerId())
+                    .map(UserProfile::getDisplayName)
+                    .orElse("Người gọi");
+            notificationDispatcher.dispatch(NotificationDispatchRequest.builder()
+                    .type(NotificationType.MISSED_PRIVATE_CALL)
+                    .targetType(NotificationTargetType.CALL)
+                    .targetId(call.getId())
+                    .actorId(call.getCallerId())
+                    .explicitRecipientIds(List.of(call.getCalleeId()))
+                    .metadata(Map.of(
+                            "actorName", callerName,
+                            "callId", call.getId().toString(),
+                            "callType", call.getType() != null ? call.getType().name() : ""
+                    ))
+                    .dedupKeyPrefix("call:" + call.getId() + ":missed")
+                    .recipientDirectlyAffected(true)
+                    .build());
+        } catch (Exception ex) {
+            log.warn("[CallService] Notification dispatch failed for missed call callId={} calleeId={}: {}",
+                    call.getId(),
+                    call.getCalleeId(),
+                    ex.getMessage());
+        }
     }
 
     /**

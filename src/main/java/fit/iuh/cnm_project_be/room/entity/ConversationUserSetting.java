@@ -41,6 +41,12 @@ public class ConversationUserSetting {
     @Column(name = "muted_at")
     private Instant mutedAt;
 
+    @Column(name = "muted_until")
+    private Instant mutedUntil;
+
+    @Column(name = "last_muted_at")
+    private Instant lastMutedAt;
+
     @Column(name = "archived_at")
     private Instant archivedAt;
 

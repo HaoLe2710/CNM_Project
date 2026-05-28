@@ -31,6 +31,13 @@ import fit.iuh.cnm_project_be.message.repository.MessageReactionRepository;
 import fit.iuh.cnm_project_be.message.repository.MessageRepository;
 import fit.iuh.cnm_project_be.message.repository.MessageStatusRepository;
 import fit.iuh.cnm_project_be.message.repository.MessageUserStateRepository;
+import fit.iuh.cnm_project_be.notification.dto.NotificationDispatchRequest;
+import fit.iuh.cnm_project_be.notification.dto.ResolvedNotificationRecipient;
+import fit.iuh.cnm_project_be.notification.enums.NotificationTargetType;
+import fit.iuh.cnm_project_be.notification.enums.NotificationType;
+import fit.iuh.cnm_project_be.notification.service.NotificationContentBuilder;
+import fit.iuh.cnm_project_be.notification.service.NotificationDispatcher;
+import fit.iuh.cnm_project_be.notification.service.NotificationRecipientResolver;
 import fit.iuh.cnm_project_be.realtime.dto.RealtimeEvent;
 import fit.iuh.cnm_project_be.realtime.dto.RealtimeEventType;
 import fit.iuh.cnm_project_be.room.dto.ConversationMemberResponse;
@@ -100,6 +107,9 @@ public class MessageService {
     private final UserProfileRepository userProfileRepository;
     private final SimpMessagingTemplate messagingTemplate;
     private final S3MediaStorageService s3MediaStorageService;
+    private final NotificationDispatcher notificationDispatcher;
+    private final NotificationRecipientResolver notificationRecipientResolver;
+    private final NotificationContentBuilder notificationContentBuilder;
 
     @Value("${app.message.unsend-window-minutes:15}")
     private long unsendWindowMinutes;
@@ -134,6 +144,7 @@ public class MessageService {
         messagingTemplate.convertAndSend("/topic/conversations/" + conversation.getId(),
                 RealtimeEvent.of(RealtimeEventType.MESSAGE_CREATED, response));
         broadcastConversationUpdatesForNewMessage(conversation, savedMessage);
+        safeDispatchMessageNotifications(conversation, savedMessage);
 
         return response;
     }
@@ -323,9 +334,10 @@ public class MessageService {
 
         reaction.setReactionType(request.getReactionType());
         reaction.setUpdatedAt(Instant.now());
-        messageReactionRepository.save(reaction);
+        MessageReaction savedReaction = messageReactionRepository.save(reaction);
 
         broadcastReactionUpdate(message, userId, request.getReactionType());
+        safeDispatchReactionNotification(message, userId, savedReaction);
     }
 
     @Transactional
@@ -938,6 +950,93 @@ public class MessageService {
                 notificationLevel,
                 mentioned);
         return true;
+    }
+
+    private void safeDispatchMessageNotifications(Conversation conversation, Message message) {
+        if (notificationDispatcher == null || notificationRecipientResolver == null || notificationContentBuilder == null) {
+            return;
+        }
+        try {
+            List<ConversationMember> members = conversationMemberRepository.findByConversationId(conversation.getId());
+            Set<UUID> mentionedUserIds = resolveMentionedUserIds(conversation, members, message.getContent());
+            List<ResolvedNotificationRecipient> recipients = notificationRecipientResolver
+                    .resolveMessageRecipients(message, conversation, mentionedUserIds);
+            if (recipients.isEmpty()) {
+                return;
+            }
+
+            String actorName = userProfileRepository.findById(message.getSenderId())
+                    .map(profile -> resolveUserDisplayName(profile, message.getSenderId()))
+                    .orElse("Ai đó");
+            String messagePreview = notificationContentBuilder.buildMessagePreview(
+                    message.getContent(),
+                    message.getOriginalLinkUrl(),
+                    message.getMessageType());
+            String conversationName = resolveDisplayName(conversation, null);
+
+            for (ResolvedNotificationRecipient recipient : recipients) {
+                notificationDispatcher.dispatch(NotificationDispatchRequest.builder()
+                        .type(recipient.getType())
+                        .targetType(NotificationTargetType.CONVERSATION)
+                        .targetId(conversation.getId())
+                        .actorId(message.getSenderId())
+                        .explicitRecipientIds(List.of(recipient.getUserId()))
+                        .conversationId(conversation.getId())
+                        .messageId(message.getId())
+                        .metadata(Map.of(
+                                "actorName", actorName,
+                                "conversationName", conversationName != null ? conversationName : "Cuộc trò chuyện",
+                                "messagePreview", messagePreview
+                        ))
+                        .dedupKeyPrefix("message:" + message.getId() + ":type:" + recipient.getType())
+                        .directMention(recipient.isDirectMention())
+                        .replyToRecipientMessage(recipient.isReplyToRecipientMessage())
+                        .recipientDirectlyAffected(recipient.isRecipientDirectlyAffected())
+                        .build());
+            }
+        } catch (Exception ex) {
+            log.warn("[Notification] Failed to dispatch message notifications messageId={} conversationId={}: {}",
+                    message.getId(),
+                    conversation.getId(),
+                    ex.getMessage());
+        }
+    }
+
+    private void safeDispatchReactionNotification(Message message, UUID actorId, MessageReaction reaction) {
+        if (notificationDispatcher == null || notificationRecipientResolver == null) {
+            return;
+        }
+        try {
+            List<UUID> recipients = notificationRecipientResolver.resolveReactionRecipients(message, actorId);
+            if (recipients.isEmpty()) {
+                return;
+            }
+            Conversation conversation = getConversationOrThrow(message.getConversationId());
+            String actorName = userProfileRepository.findById(actorId)
+                    .map(profile -> resolveUserDisplayName(profile, actorId))
+                    .orElse("Ai đó");
+            String conversationName = resolveDisplayName(conversation, null);
+            notificationDispatcher.dispatch(NotificationDispatchRequest.builder()
+                    .type(NotificationType.REACTION_TO_MY_MESSAGE)
+                    .targetType(NotificationTargetType.MESSAGE)
+                    .actorId(actorId)
+                    .explicitRecipientIds(recipients)
+                    .conversationId(message.getConversationId())
+                    .messageId(message.getId())
+                    .metadata(Map.of(
+                            "actorName", actorName,
+                            "conversationName", conversationName != null ? conversationName : "Cuộc trò chuyện",
+                            "reactionType", reaction.getReactionType() != null ? reaction.getReactionType().name() : ""
+                    ))
+                    .dedupKeyPrefix("reaction:" + reaction.getId())
+                    .recipientDirectlyAffected(true)
+                    .build());
+        } catch (Exception ex) {
+            log.warn("[Notification] Failed to dispatch reaction notification messageId={} actorId={}: {}",
+                    message.getId(),
+                    actorId,
+                    ex.getMessage());
+        }
     }
 
     private Set<UUID> resolveMentionedUserIds(Conversation conversation, List<ConversationMember> members, String content) {
