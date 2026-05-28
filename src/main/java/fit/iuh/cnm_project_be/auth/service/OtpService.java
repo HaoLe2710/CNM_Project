@@ -98,6 +98,7 @@ public class OtpService {
         return registerToken;
     }
 
+    @Transactional
     public void sendRegisterOtp(String email) {
         log.info("[OTP] - Processing registration OTP request for: {}", email);
         sendOtp(email, REGISTER_EXPIRY, OtpType.REGISTER);

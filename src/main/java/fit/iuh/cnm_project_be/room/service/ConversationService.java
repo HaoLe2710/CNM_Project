@@ -582,6 +582,11 @@ public class ConversationService {
 
     private void broadcastConversationUpdates(UUID conversationId) {
         Conversation conversation = getConversationOrThrow(conversationId);
+        ConversationResponse sharedConversationPayload = mapToResponse(conversation, null);
+        messagingTemplate.convertAndSend(
+                "/topic/conversations/" + conversationId,
+                RealtimeEvent.of(RealtimeEventType.CONVERSATION_UPDATED, sharedConversationPayload));
+
         conversationMemberRepository.findByConversationId(conversationId).forEach(member -> {
             ConversationUserSetting setting = findConversationUserSetting(conversationId, member.getUserId());
             if (!shouldDeliverConversationRefresh(setting)) {
