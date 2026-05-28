@@ -3,6 +3,7 @@ package fit.iuh.cnm_project_be.system.entity;
 import jakarta.persistence.*;
 import lombok.Getter;
 import lombok.Setter;
+import org.hibernate.annotations.ColumnTransformer;
 
 import java.time.Instant;
 import java.util.UUID;
@@ -21,6 +22,7 @@ public class ActivityLog {
     private String action;
 
     @Column(columnDefinition = "jsonb")
+    @ColumnTransformer(write = "?::jsonb")
     private String metadata;
 
     @Column(name = "created_at", nullable = false)

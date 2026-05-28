@@ -1,6 +1,8 @@
 package fit.iuh.cnm_project_be.auth.service;
 
+import fit.iuh.cnm_project_be.auth.entity.AuthOtpCode;
 import fit.iuh.cnm_project_be.auth.enums.OtpType;
+import fit.iuh.cnm_project_be.auth.repository.AuthOtpCodeRepository;
 import fit.iuh.cnm_project_be.common.exception.BusinessException;
 import fit.iuh.cnm_project_be.mail.service.MailService;
 import lombok.AccessLevel;
@@ -9,8 +11,10 @@ import lombok.experimental.FieldDefaults;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.security.SecureRandom;
+import java.time.Instant;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 
@@ -19,53 +23,60 @@ import java.util.concurrent.TimeUnit;
 @FieldDefaults(level = AccessLevel.PRIVATE, makeFinal = true)
 @Slf4j
 public class OtpService {
-    private final int REGISTER_EXPIRY = 15;
 
+    private static final int REGISTER_EXPIRY = 15;
+    private static final long USED_OTP_RETENTION_DAYS = 7;
+
+    AuthOtpCodeRepository authOtpCodeRepository;
     RedisTemplate<Object, Object> redisTemplate;
     MailService mailService;
 
     public static String generateOtp() {
         SecureRandom random = new SecureRandom();
-        int number = random.nextInt(1000000);
+        int number = random.nextInt(1_000_000);
         return String.format("%06d", number);
     }
 
-    public void sendOtp(String email, long expiryMinutes, OtpType type) {
+    @Transactional
+    public void sendOtp(String identifier, long expiryMinutes, OtpType type) {
         String otp = generateOtp();
-
-        String key = buildOtpKey(email, type);
-        redisTemplate.opsForValue().set(key, otp, expiryMinutes, TimeUnit.MINUTES);
+        persistOtp(identifier, otp, expiryMinutes, type);
 
         try {
-            mailService.sendOtpMail(email, otp, expiryMinutes, type);
-            log.info("[OTP] - Successfully sent OTP code [type: {}, to: {}, expiry: {} mins]", type, email, expiryMinutes);
+            mailService.sendOtpMail(identifier, otp, expiryMinutes, type);
+            log.info("[OTP] - Successfully sent OTP code [type: {}, to: {}, expiry: {} mins]", type, identifier, expiryMinutes);
         } catch (Exception e) {
-            log.error("[OTP] - Failed to send {} email to {}: {}", type, email, e.getMessage());
+            log.error("[OTP] - Failed to send {} email to {}: {}", type, identifier, e.getMessage());
             throw new BusinessException("Failed to send verification email. Please try again.");
         }
     }
 
-    public boolean verifyOtp(String email, String inputOtp, OtpType type) {
-        String key = buildOtpKey(email, type);
-        Object savedOtp = redisTemplate.opsForValue().get(key);
+    @Transactional
+    public boolean verifyOtp(String identifier, String inputOtp, OtpType type) {
+        purgeOldCodes();
 
-        if (savedOtp == null) {
+        AuthOtpCode savedOtp = authOtpCodeRepository
+                .findFirstByIdentifierAndOtpTypeAndUsedAtIsNullOrderByCreatedAtDesc(identifier, type)
+                .orElseThrow(() -> new BusinessException("OTP has expired or does not exist. Please request a new one."));
+
+        if (savedOtp.getExpiresAt().isBefore(Instant.now())) {
+            savedOtp.setUsedAt(Instant.now());
+            authOtpCodeRepository.save(savedOtp);
             throw new BusinessException("OTP has expired or does not exist. Please request a new one.");
         }
 
-        if (!savedOtp.toString().equals(inputOtp)) {
+        if (!savedOtp.getOtpCode().equals(inputOtp)) {
             throw new BusinessException("Incorrect OTP. Please check and try again.");
         }
 
-        // Đã verify xong, xóa mã OTP 6 số ngay lập tức để bảo mật
-        redisTemplate.delete(key);
+        savedOtp.setUsedAt(Instant.now());
+        authOtpCodeRepository.save(savedOtp);
         return true;
     }
 
     public void validateRegisterToken(String email, String token) {
         String key = "register:token:" + email;
         Object savedToken = redisTemplate.opsForValue().get(key);
-        System.out.println(key);
 
         if (savedToken == null) {
             throw new BusinessException("Registration session not found or expired for this email. Please verify OTP again.");
@@ -74,18 +85,13 @@ public class OtpService {
         if (!savedToken.toString().equals(token)) {
             throw new BusinessException("Invalid registration token. Please try the process again.");
         }
-        // Xóa Token UUID sau khi đăng ký thành công (Single-use)
-        // redisTemplate.delete(key);
     }
 
+    @Transactional
     public String verifyOtpAndGenerateToken(String email, String inputOtp, OtpType type) {
-        // 1. Gọi verify để kiểm tra mã (hàm này sẽ ném lỗi nếu mã sai/hết hạn)
-        this.verifyOtp(email, inputOtp, type);
+        verifyOtp(email, inputOtp, type);
 
-        // 2. Tạo Token UUID
         String registerToken = UUID.randomUUID().toString();
-
-        // 3. Lưu vào Redis (15 phút)
         String key = "register:token:" + email;
         redisTemplate.opsForValue().set(key, registerToken, 15, TimeUnit.MINUTES);
 
@@ -94,19 +100,37 @@ public class OtpService {
 
     public void sendRegisterOtp(String email) {
         log.info("[OTP] - Processing registration OTP request for: {}", email);
-        this.sendOtp(email, REGISTER_EXPIRY, OtpType.REGISTER);
+        sendOtp(email, REGISTER_EXPIRY, OtpType.REGISTER);
     }
 
+    @Transactional
     public String sendPhoneOtpMock(String phone, long expiryMinutes, OtpType type) {
         String otp = generateOtp();
-        String key = buildOtpKey(phone, type);
-        redisTemplate.opsForValue().set(key, otp, expiryMinutes, TimeUnit.MINUTES);
+        persistOtp(phone, otp, expiryMinutes, type);
         log.warn("[OTP-MOCK] - Mock phone OTP generated [type: {}, phone: {}, otp: {}, expiry: {} mins]",
                 type, phone, otp, expiryMinutes);
         return otp;
     }
 
-    private String buildOtpKey(String identifier, OtpType type) {
-        return "otp:" + type.name() + ":" + identifier;
+    private void persistOtp(String identifier, String otp, long expiryMinutes, OtpType type) {
+        Instant now = Instant.now();
+        authOtpCodeRepository.markActiveCodesUsed(identifier, type, now);
+
+        AuthOtpCode authOtpCode = new AuthOtpCode();
+        authOtpCode.setIdentifier(identifier);
+        authOtpCode.setOtpCode(otp);
+        authOtpCode.setOtpType(type);
+        authOtpCode.setExpiresAt(now.plusSeconds(expiryMinutes * 60));
+        authOtpCodeRepository.save(authOtpCode);
+
+        purgeOldCodes();
+    }
+
+    private void purgeOldCodes() {
+        Instant now = Instant.now();
+        authOtpCodeRepository.purgeExpiredOrOldUsedCodes(
+                now,
+                now.minusSeconds(TimeUnit.DAYS.toSeconds(USED_OTP_RETENTION_DAYS))
+        );
     }
 }

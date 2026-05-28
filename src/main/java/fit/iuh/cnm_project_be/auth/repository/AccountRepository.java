@@ -24,4 +24,6 @@ public interface AccountRepository extends BaseRepository<Account, UUID> {
 
     boolean existsByEmailOrPhone(String email, String phone);
     boolean existsByEmailOrPhoneAndDeletedAtIsNull(String email, String phone);
+
+    long countByDeletedAtIsNull();
 }

@@ -17,4 +17,6 @@ public interface PostRepository
     List<Post> findByUserIdAndDeletedAtIsNullAndArchivedAtIsNullOrderByCreatedAtDesc(UUID userId, Pageable pageable);
 
     List<Post> findByUserIdAndDeletedAtIsNullAndArchivedAtIsNotNullOrderByArchivedAtDesc(UUID userId, Pageable pageable);
+
+    long countByDeletedAtIsNullAndArchivedAtIsNull();
 }
