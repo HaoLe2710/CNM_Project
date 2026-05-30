@@ -17,6 +17,8 @@ public interface UserProfileRepository
     Optional<UserProfile> findByUsernameAndDeletedAtIsNull(String username);
 
     Optional<UserProfile> findByInviteLinkAndDeletedAtIsNull(String inviteLink);
+
+    List<UserProfile> findByUserIdInAndDeletedAtIsNull(List<UUID> userIds);
 //    @Query("""
 //    select u from UserProfile u
 //    where u.deletedAt is null

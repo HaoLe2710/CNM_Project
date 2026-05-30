@@ -33,5 +33,10 @@ public enum NotificationType {
     POST_TAGGED,
     POST_SHARED,
 
+    REMINDER_CREATED,
+    REMINDER_DUE,
+    REMINDER_UPDATED,
+    REMINDER_CANCELLED,
+
     SYSTEM_NOTICE
 }

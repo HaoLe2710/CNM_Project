@@ -93,6 +93,7 @@ class CallNotificationIntegrationTest {
         verify(notificationDispatcher).dispatch(captor.capture());
         assertThat(captor.getValue().getType()).isEqualTo(NotificationType.INCOMING_PRIVATE_CALL);
         assertThat(captor.getValue().getExplicitRecipientIds()).containsExactly(calleeId);
+        assertThat(captor.getValue().getDedupKeyPrefix()).startsWith("INCOMING_PRIVATE_CALL:");
     }
 
     @Test

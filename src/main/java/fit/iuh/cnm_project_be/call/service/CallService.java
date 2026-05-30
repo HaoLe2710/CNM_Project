@@ -204,7 +204,7 @@ public class CallService {
                             "sfuUrl", currentSfuUrl,
                             "callType", call.getType() != null ? call.getType().name() : ""
                     ))
-                    .dedupKeyPrefix("call:" + call.getId() + ":incoming")
+                    .dedupKeyPrefix(NotificationType.INCOMING_PRIVATE_CALL.name() + ":" + call.getId())
                     .recipientDirectlyAffected(true)
                     .build());
             if (result.hasPushSuccess()) {

@@ -48,6 +48,7 @@ import fit.iuh.cnm_project_be.room.entity.ConversationMember;
 import fit.iuh.cnm_project_be.room.entity.ConversationUserSetting;
 import fit.iuh.cnm_project_be.room.enums.ConversationNotificationLevel;
 import fit.iuh.cnm_project_be.room.enums.ConversationType;
+import fit.iuh.cnm_project_be.room.enums.GroupConversationLabel;
 import fit.iuh.cnm_project_be.room.enums.MemberRole;
 import fit.iuh.cnm_project_be.room.repository.ConversationMemberRepository;
 import fit.iuh.cnm_project_be.room.repository.ConversationRepository;
@@ -93,8 +94,14 @@ public class MessageService {
 
     private static final int DEFAULT_MESSAGE_PAGE_SIZE = 50;
     private static final int MAX_MESSAGE_PAGE_SIZE = 100;
+    private static final long MAX_AUDIO_DURATION_MS = 300_000L;
+    private static final int MIN_WAVEFORM_SAMPLES = 16;
+    private static final int MAX_WAVEFORM_SAMPLES = 128;
+    private static final int MAX_AUDIO_FORMAT_LENGTH = 32;
+    private static final String GROUP_SYSTEM_PREFIX = "[[GROUP_SYSTEM]]";
     private static final Pattern MENTION_PATTERN = Pattern.compile("(?<![A-Za-z0-9._])@([A-Za-z0-9._]+)");
     private static final Pattern ABSOLUTE_URL_PATTERN = Pattern.compile("^(?i)https?://\\S+$");
+    private static final String SIMPLE_JSON_STRING_FIELD_REGEX = "\"%s\"\\s*:\\s*\"((?:\\\\.|[^\"\\\\])*)\"";
 
     private final MessageRepository messageRepository;
     private final MessageAttachmentRepository messageAttachmentRepository;
@@ -597,6 +604,9 @@ public class MessageService {
                 .contentType(attachment.getFileType())
                 .fileSize(attachment.getFileSize())
                 .type(attachment.getAttachmentType())
+                .durationMs(attachment.getDurationMs())
+                .waveform(deserializeWaveform(attachment.getWaveform()))
+                .audioFormat(attachment.getAudioFormat())
                 .build();
     }
 
@@ -698,6 +708,8 @@ public class MessageService {
         if (!hasContent && !hasAttachments && !hasOriginalLinkUrl) {
             throw new BusinessException("Message must contain text, original link, or attachments");
         }
+
+        validateAudioPayload(request);
     }
 
     private String validateEditedContent(EditMessageRequest request, String existingContent, String existingOriginalLinkUrl) {
@@ -769,6 +781,9 @@ public class MessageService {
         }
 
         attachments.forEach(payload -> {
+            boolean isAudioAttachment = payload.getType() == MessageType.AUDIO;
+            validateAttachmentAudioMetadata(payload, isAudioAttachment);
+
             MessageAttachment attachment = new MessageAttachment();
             attachment.setMessageId(messageId);
             attachment.setFileUrl(payload.getUrl());
@@ -777,8 +792,125 @@ public class MessageService {
             attachment.setFileType(payload.getContentType());
             attachment.setAttachmentType(payload.getType());
             attachment.setFileSize(payload.getFileSize());
+            attachment.setDurationMs(payload.getDurationMs());
+            attachment.setWaveform(serializeWaveform(payload.getWaveform()));
+            attachment.setAudioFormat(normalizeAudioFormat(payload.getAudioFormat()));
             messageAttachmentRepository.save(attachment);
         });
+    }
+
+    private void validateAudioPayload(SendMessageRequest request) {
+        List<MessageAttachmentPayload> attachments = request.getAttachments();
+        if (attachments == null || attachments.isEmpty()) {
+            if (request.getMessageType() == MessageType.AUDIO) {
+                throw new BusinessException("Audio message must include at least one audio attachment");
+            }
+            return;
+        }
+
+        boolean hasAudioAttachment = false;
+
+        for (MessageAttachmentPayload payload : attachments) {
+            boolean isAudioAttachment = payload.getType() == MessageType.AUDIO;
+            if (isAudioAttachment) {
+                hasAudioAttachment = true;
+            }
+            validateAttachmentAudioMetadata(payload, isAudioAttachment);
+        }
+
+        if (request.getMessageType() == MessageType.AUDIO && !hasAudioAttachment) {
+            throw new BusinessException("Audio message must include at least one audio attachment");
+        }
+    }
+
+    private void validateAttachmentAudioMetadata(MessageAttachmentPayload payload, boolean isAudioAttachment) {
+        boolean hasAudioMetadata = payload.getDurationMs() != null
+                || payload.getWaveform() != null
+                || normalizeAudioFormat(payload.getAudioFormat()) != null;
+
+        if (hasAudioMetadata && !isAudioAttachment) {
+            throw new BusinessException("Audio metadata can only be attached to audio files");
+        }
+
+        if (!isAudioAttachment) {
+            return;
+        }
+
+        Long durationMs = payload.getDurationMs();
+        if (durationMs != null && (durationMs <= 0 || durationMs > MAX_AUDIO_DURATION_MS)) {
+            throw new BusinessException("Audio duration exceeds allowed maximum of 5 minutes");
+        }
+
+        List<Double> waveform = payload.getWaveform();
+        if (waveform != null) {
+            if (waveform.size() < MIN_WAVEFORM_SAMPLES || waveform.size() > MAX_WAVEFORM_SAMPLES) {
+                throw new BusinessException("Waveform must contain between 16 and 128 samples");
+            }
+
+            boolean hasInvalidSample = waveform.stream()
+                    .anyMatch(sample -> sample == null
+                            || sample.isNaN()
+                            || sample.isInfinite()
+                            || sample < 0
+                            || sample > 1);
+
+            if (hasInvalidSample) {
+                throw new BusinessException("Waveform samples must be normalized between 0 and 1");
+            }
+        }
+
+        String normalizedAudioFormat = normalizeAudioFormat(payload.getAudioFormat());
+        if (normalizedAudioFormat != null && normalizedAudioFormat.length() > MAX_AUDIO_FORMAT_LENGTH) {
+            throw new BusinessException("Audio format value is too long");
+        }
+    }
+
+    private String normalizeAudioFormat(String audioFormat) {
+        String normalizedValue = normalizeNullableText(audioFormat);
+        return normalizedValue == null ? null : normalizedValue.toLowerCase(Locale.ROOT);
+    }
+
+    private String serializeWaveform(List<Double> waveform) {
+        if (waveform == null) {
+            return null;
+        }
+
+        if (waveform.isEmpty()) {
+            return "[]";
+        }
+
+        return waveform.stream()
+                .map(sample -> Double.toString(sample))
+                .collect(Collectors.joining(",", "[", "]"));
+    }
+
+    private List<Double> deserializeWaveform(String waveformJson) {
+        String normalized = normalizeNullableText(waveformJson);
+        if (normalized == null) {
+            return null;
+        }
+
+        if (!normalized.startsWith("[") || !normalized.endsWith("]")) {
+            return null;
+        }
+
+        String body = normalized.substring(1, normalized.length() - 1).trim();
+        if (body.isEmpty()) {
+            return List.of();
+        }
+
+        String[] tokens = body.split(",");
+        List<Double> values = new ArrayList<>(tokens.length);
+
+        for (String token : tokens) {
+            try {
+                values.add(Double.parseDouble(token.trim()));
+            } catch (NumberFormatException ex) {
+                return null;
+            }
+        }
+
+        return values;
     }
 
     // Delivery lifecycle state remains separate from user-view state.
@@ -890,13 +1022,16 @@ public class MessageService {
         Message lastMessage = lastMessages.isEmpty() ? null : lastMessages.get(0);
         String displayName = resolveDisplayName(conversation, setting);
         List<ConversationMemberResponse> groupMembers = buildGroupMembers(conversation);
+        GroupConversationLabel groupLabel = conversation.getType() == ConversationType.GROUP && setting != null
+                ? setting.getGroupLabel()
+                : null;
 
         ConversationResponse response = ConversationResponse.builder()
                 .id(conversation.getId())
                 .name(conversation.getName())
                 .avatarUrl(conversation.getAvatarUrl())
                 .type(String.valueOf(conversation.getType()))
-                .lastMessage(lastMessage != null ? lastMessage.getContent() : "")
+                .lastMessage(lastMessage != null ? resolveConversationPreviewText(lastMessage) : "")
                 .lastMessageTime(lastMessage != null ? lastMessage.getCreatedAt() : conversation.getCreatedAt())
                 .unreadCount(messageUserStateRepository.countUnreadMessages(conversation.getId(), userId))
                 .muted(setting != null && setting.getMutedAt() != null)
@@ -904,6 +1039,9 @@ public class MessageService {
                 .pinned(setting != null && setting.getPinnedAt() != null)
                 .notificationLevel(resolveNotificationLevel(setting))
                 .customName(setting != null ? setting.getCustomName() : null)
+                .groupLabel(groupLabel != null ? groupLabel.name() : null)
+                .groupLabelDisplayName(groupLabel != null ? groupLabel.getDisplayName() : null)
+                .groupLabelColor(groupLabel != null ? groupLabel.getColor() : null)
                 .displayName(displayName)
                 .members(groupMembers)
                 .build();
@@ -916,6 +1054,66 @@ public class MessageService {
         }
 
         return response;
+    }
+
+    private String resolveConversationPreviewText(Message message) {
+        if (message == null) {
+            return "";
+        }
+
+        if (message.getMessageType() == MessageType.SYSTEM) {
+            return resolveGroupSystemPreviewText(message.getContent());
+        }
+
+        return message.getContent();
+    }
+
+    private String resolveGroupSystemPreviewText(String content) {
+        String normalized = content == null ? "" : content.trim();
+        if (!normalized.startsWith(GROUP_SYSTEM_PREFIX)) {
+            return "Hoạt động nhóm";
+        }
+
+        String kind = extractGroupSystemJsonField(normalized, "kind");
+        String actorName = defaultIfBlank(extractGroupSystemJsonField(normalized, "actorName"), "Ai đó");
+        String targetName = defaultIfBlank(extractGroupSystemJsonField(normalized, "targetName"), "một thành viên");
+        String nickname = extractGroupSystemJsonField(normalized, "nickname");
+        String groupName = defaultIfBlank(
+                extractGroupSystemJsonField(normalized, "name"),
+                defaultIfBlank(extractGroupSystemJsonField(normalized, "conversationName"), "nhóm"));
+
+        return switch (kind) {
+            case "group_member_added" -> actorName + " đã thêm " + targetName + " vào nhóm";
+            case "group_member_removed" -> actorName + " đã xóa " + targetName + " khỏi nhóm";
+            case "group_left" -> actorName + " đã rời nhóm";
+            case "group_admin_promoted" -> actorName + " đã cấp phó nhóm cho " + targetName;
+            case "group_admin_demoted" -> actorName + " đã thu hồi phó nhóm của " + targetName;
+            case "group_owner_transferred" -> actorName + " đã chuyển quyền trưởng nhóm cho " + targetName;
+            case "group_renamed" -> actorName + " đã đổi tên nhóm thành \"" + groupName + "\"";
+            case "group_avatar_changed" -> actorName + " đã cập nhật ảnh nhóm";
+            case "group_background_changed" -> actorName + " đã đổi nền chat";
+            case "group_nickname_changed" -> nickname == null || nickname.isBlank()
+                    ? actorName + " đã xóa biệt danh của " + targetName
+                    : actorName + " đã đổi biệt danh của " + targetName + " thành \"" + nickname + "\"";
+            case "group_disbanded" -> actorName + " đã giải tán nhóm " + groupName;
+            default -> "Hoạt động nhóm";
+        };
+    }
+
+    private String extractGroupSystemJsonField(String content, String fieldName) {
+        Matcher matcher = Pattern.compile(String.format(SIMPLE_JSON_STRING_FIELD_REGEX, fieldName)).matcher(content);
+        if (!matcher.find()) {
+            return "";
+        }
+
+        return matcher.group(1)
+                .replace("\\\"", "\"")
+                .replace("\\\\", "\\")
+                .trim();
+    }
+
+    private String defaultIfBlank(String value, String fallback) {
+        return value == null || value.isBlank() ? fallback : value;
     }
 
     private ConversationUserSetting findConversationUserSetting(UUID conversationId, UUID userId) {
@@ -988,7 +1186,7 @@ public class MessageService {
                                 "conversationName", conversationName != null ? conversationName : "Cuộc trò chuyện",
                                 "messagePreview", messagePreview
                         ))
-                        .dedupKeyPrefix("message:" + message.getId() + ":type:" + recipient.getType())
+                        .dedupKeyPrefix(recipient.getType().name() + ":" + message.getId())
                         .directMention(recipient.isDirectMention())
                         .replyToRecipientMessage(recipient.isReplyToRecipientMessage())
                         .recipientDirectlyAffected(recipient.isRecipientDirectlyAffected())
@@ -1028,7 +1226,7 @@ public class MessageService {
                             "conversationName", conversationName != null ? conversationName : "Cuộc trò chuyện",
                             "reactionType", reaction.getReactionType() != null ? reaction.getReactionType().name() : ""
                     ))
-                    .dedupKeyPrefix("reaction:" + reaction.getId())
+                    .dedupKeyPrefix(NotificationType.REACTION_TO_MY_MESSAGE.name() + ":" + reaction.getId())
                     .recipientDirectlyAffected(true)
                     .build());
         } catch (Exception ex) {

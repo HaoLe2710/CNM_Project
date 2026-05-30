@@ -16,6 +16,8 @@ public interface FriendshipRepository
 
     List<Friendship> findByUserIdAndDeletedAtIsNullOrderByCreatedAtDesc(UUID userId);
 
+    List<Friendship> findByUserIdAndCloseFriendTrueAndDeletedAtIsNullOrderByCreatedAtDesc(UUID userId);
+
     Optional<Friendship> findByUserIdAndFriendIdAndDeletedAtIsNull(UUID userId, UUID friendId);
 
 

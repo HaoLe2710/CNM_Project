@@ -49,6 +49,13 @@ public class NotificationEventClassifier {
             NotificationType.GROUP_DISBANDED
     );
 
+    private static final Set<NotificationType> REMINDER_EVENTS = EnumSet.of(
+            NotificationType.REMINDER_CREATED,
+            NotificationType.REMINDER_DUE,
+            NotificationType.REMINDER_UPDATED,
+            NotificationType.REMINDER_CANCELLED
+    );
+
     public boolean isChatEvent(NotificationType type) {
         return type != null && CHAT_EVENTS.contains(type);
     }
@@ -65,7 +72,11 @@ public class NotificationEventClassifier {
         return type != null && GROUP_LIFECYCLE_EVENTS.contains(type);
     }
 
+    public boolean isReminderEvent(NotificationType type) {
+        return type != null && REMINDER_EVENTS.contains(type);
+    }
+
     public boolean isConversationEvent(NotificationType type) {
-        return isChatEvent(type) || isCallEvent(type) || isGroupLifecycleEvent(type);
+        return isChatEvent(type) || isCallEvent(type) || isGroupLifecycleEvent(type) || isReminderEvent(type);
     }
 }

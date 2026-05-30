@@ -3,9 +3,12 @@ package fit.iuh.cnm_project_be.user.controller;
 
 import fit.iuh.cnm_project_be.common.api.ApiResponse;
 import fit.iuh.cnm_project_be.user.dto.request.SendFriendRequestRequest;
+import fit.iuh.cnm_project_be.user.dto.request.UpdateFriendshipSettingRequest;
 import fit.iuh.cnm_project_be.user.dto.response.FriendRequestResponse;
 import fit.iuh.cnm_project_be.user.dto.response.FriendshipResponse;
+import fit.iuh.cnm_project_be.user.dto.response.FriendshipSettingResponse;
 import fit.iuh.cnm_project_be.user.service.FriendService;
+import fit.iuh.cnm_project_be.user.service.FriendshipSettingService;
 import jakarta.validation.Valid;
 import lombok.AccessLevel;
 import lombok.AllArgsConstructor;
@@ -21,10 +24,36 @@ import java.util.UUID;
 @FieldDefaults(level = AccessLevel.PRIVATE, makeFinal = true)
 public class FriendController {
     FriendService friendService;
+    FriendshipSettingService friendshipSettingService;
 
     @GetMapping
-    public ApiResponse<List<FriendshipResponse>> getFriends() {
-        return ApiResponse.ok(friendService.getFriends(), UUID.randomUUID().toString());
+    public ApiResponse<List<FriendshipResponse>> getFriends(
+            @RequestParam(defaultValue = "false") boolean closeOnly) {
+        return ApiResponse.ok(friendService.getFriends(closeOnly), UUID.randomUUID().toString());
+    }
+
+    @GetMapping("/close")
+    public ApiResponse<List<FriendshipResponse>> getCloseFriends() {
+        return ApiResponse.ok(friendshipSettingService.listMyCloseFriends(), UUID.randomUUID().toString());
+    }
+
+    @GetMapping("/settings")
+    public ApiResponse<List<FriendshipSettingResponse>> getMyFriendshipSettings() {
+        return ApiResponse.ok(friendshipSettingService.getMyFriendshipSettings(), UUID.randomUUID().toString());
+    }
+
+    @GetMapping("/{friendId}/settings")
+    public ApiResponse<FriendshipSettingResponse> getFriendshipSetting(@PathVariable UUID friendId) {
+        return ApiResponse.ok(friendshipSettingService.getMyFriendshipSetting(friendId), UUID.randomUUID().toString());
+    }
+
+    @PatchMapping("/{friendId}/settings")
+    public ApiResponse<FriendshipSettingResponse> updateFriendshipSetting(
+            @PathVariable UUID friendId,
+            @Valid @RequestBody(required = false) UpdateFriendshipSettingRequest request) {
+        return ApiResponse.ok(
+                friendshipSettingService.updateMyFriendshipSetting(friendId, request),
+                UUID.randomUUID().toString());
     }
 
     @PostMapping("/requests")

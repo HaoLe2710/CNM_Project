@@ -95,6 +95,7 @@ class GroupCallNotificationIntegrationTest {
         verify(notificationDispatcher).dispatch(captor.capture());
         assertThat(captor.getValue().getType()).isEqualTo(NotificationType.GROUP_CALL_STARTED);
         assertThat(captor.getValue().getExplicitRecipientIds()).containsExactly(invitedId);
+        assertThat(captor.getValue().getDedupKeyPrefix()).startsWith("GROUP_CALL_STARTED:");
     }
 
     @Test

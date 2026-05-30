@@ -73,6 +73,12 @@ public class NotificationContentBuilder {
                 || type == NotificationType.POST_SHARED) {
             return actorName;
         }
+        if (type == NotificationType.REMINDER_DUE
+                || type == NotificationType.REMINDER_CREATED
+                || type == NotificationType.REMINDER_UPDATED
+                || type == NotificationType.REMINDER_CANCELLED) {
+            return "Nhắc hẹn";
+        }
         return conversationName;
     }
 
@@ -97,6 +103,20 @@ public class NotificationContentBuilder {
             case COMMENT_MENTION -> actorName + " đã nhắc đến bạn trong một bình luận";
             case POST_TAGGED -> actorName + " đã gắn thẻ bạn trong một bài viết";
             case POST_SHARED -> actorName + " đã chia sẻ bài viết của bạn";
+            case REMINDER_CREATED -> actorName + " đã tạo nhắc hẹn: " + firstNonBlank(
+                    stringValue(metadata, "reminderTitle", ""),
+                    "Nhắc hẹn mới");
+            case REMINDER_DUE -> "Đến giờ nhắc hẹn: " + firstNonBlank(
+                    stringValue(metadata, "reminderTitle", ""),
+                    "Bạn có nhắc hẹn đến hạn");
+            case REMINDER_UPDATED -> actorName + " đã cập nhật nhắc hẹn: " + firstNonBlank(
+                    stringValue(metadata, "reminderTitle", ""),
+                    "Nhắc hẹn");
+            case REMINDER_CANCELLED -> actorName + " đã hủy nhắc hẹn: " + firstNonBlank(
+                    stringValue(metadata, "reminderTitle", ""),
+                    "Nhắc hẹn");
+            case GROUP_NICKNAME_CHANGED -> actorName + " đã cập nhật biệt danh trong nhóm";
+            case GROUP_DISBANDED -> "Nhóm " + stringValue(metadata, "conversationName", "này") + " đã bị giải tán";
             default -> "Bạn có thông báo mới";
         };
     }
@@ -120,6 +140,12 @@ public class NotificationContentBuilder {
             case COMMENT_MENTION -> "Bạn được nhắc trong một bình luận";
             case POST_TAGGED -> "Bạn được gắn thẻ trong một bài viết";
             case POST_SHARED -> "Bài viết của bạn được chia sẻ";
+            case REMINDER_CREATED -> "Bạn có nhắc hẹn mới";
+            case REMINDER_DUE -> "Bạn có nhắc hẹn đến hạn";
+            case REMINDER_UPDATED -> "Nhắc hẹn đã được cập nhật";
+            case REMINDER_CANCELLED -> "Nhắc hẹn đã bị hủy";
+            case GROUP_NICKNAME_CHANGED -> "Biệt danh thành viên trong nhóm đã được cập nhật";
+            case GROUP_DISBANDED -> "Nhóm của bạn đã bị giải tán";
             default -> "Bạn có thông báo mới";
         };
     }

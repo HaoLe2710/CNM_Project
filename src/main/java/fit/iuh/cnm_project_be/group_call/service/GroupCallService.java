@@ -279,7 +279,7 @@ public class GroupCallService {
                             "sfuUrl", currentSfuUrl,
                             "callType", groupCall.getType() != null ? groupCall.getType().name() : ""
                     ))
-                    .dedupKeyPrefix("group-call:" + groupCall.getId() + ":started")
+                    .dedupKeyPrefix(NotificationType.GROUP_CALL_STARTED.name() + ":" + groupCall.getId())
                     .recipientDirectlyAffected(true)
                     .build());
         } catch (Exception ex) {

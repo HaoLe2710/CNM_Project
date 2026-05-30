@@ -26,8 +26,10 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.UUID;
 
 @Service
@@ -186,18 +188,20 @@ public class FriendService {
                 currentUser
         );
     }
-//    Lấy danh sách bạn bè
+    //    Lấy danh sách bạn bè
     @Transactional(readOnly = true)
     public List<FriendshipResponse> getFriends() {
-        UserProfile currentUser = userService.getMyProfile();
+        return getFriends(false);
+    }
 
-        return friendshipRepository.findByUserIdAndDeletedAtIsNullOrderByCreatedAtDesc(currentUser.getUserId())
-                .stream()
-                .map(friendship -> friendMapper.toFriendshipResponse(
-                        friendship,
-                        userService.getUser(friendship.getFriendId())
-                ))
-                .toList();
+    @Transactional(readOnly = true)
+    public List<FriendshipResponse> getFriends(boolean closeOnly) {
+        UserProfile currentUser = userService.getMyProfile();
+        List<Friendship> friendships = closeOnly
+                ? friendshipRepository.findByUserIdAndCloseFriendTrueAndDeletedAtIsNullOrderByCreatedAtDesc(currentUser.getUserId())
+                : friendshipRepository.findByUserIdAndDeletedAtIsNullOrderByCreatedAtDesc(currentUser.getUserId());
+
+        return mapFriendshipsToResponses(friendships);
     }
 //    Giải quyết trạng thái quan hệ giữa 2 user
     private FriendRelationshipStatus resolveRelationshipStatus(UUID currentUserId, UUID targetUserId) {
@@ -237,6 +241,33 @@ public class FriendService {
         friendship.setUserId(userId);
         friendship.setFriendId(friendId);
         return friendship;
+    }
+
+    private List<FriendshipResponse> mapFriendshipsToResponses(List<Friendship> friendships) {
+        if (friendships == null || friendships.isEmpty()) {
+            return List.of();
+        }
+
+        List<UUID> friendIds = friendships.stream()
+                .map(Friendship::getFriendId)
+                .filter(Objects::nonNull)
+                .distinct()
+                .toList();
+        Map<UUID, UserProfile> profileById = userProfileRepository
+                .findByUserIdInAndDeletedAtIsNull(friendIds)
+                .stream()
+                .collect(LinkedHashMap::new, (acc, profile) -> acc.put(profile.getUserId(), profile), Map::putAll);
+
+        return friendships.stream()
+                .map(friendship -> {
+                    UserProfile friendProfile = profileById.get(friendship.getFriendId());
+                    if (friendProfile == null) {
+                        return null;
+                    }
+                    return friendMapper.toFriendshipResponse(friendship, friendProfile);
+                })
+                .filter(Objects::nonNull)
+                .toList();
     }
 
     private void safeDispatchFriendRequestReceived(

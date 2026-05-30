@@ -90,14 +90,14 @@ public class NotificationRecipientResolver {
         Map<UUID, ResolvedNotificationRecipient> recipients = new LinkedHashMap<>();
 
         resolveGroupMentionRecipients(message, mentionedUserIds).forEach(userId ->
-                recipients.put(userId, ResolvedNotificationRecipient.builder()
+                upsertRecipientWithPriority(recipients, ResolvedNotificationRecipient.builder()
                         .userId(userId)
                         .type(NotificationType.GROUP_MENTION)
                         .directMention(true)
                         .build()));
 
         resolveReplyRecipients(message).forEach(userId ->
-                recipients.putIfAbsent(userId, ResolvedNotificationRecipient.builder()
+                upsertRecipientWithPriority(recipients, ResolvedNotificationRecipient.builder()
                         .userId(userId)
                         .type(NotificationType.REPLY_TO_MY_MESSAGE)
                         .replyToRecipientMessage(true)
@@ -110,11 +110,52 @@ public class NotificationRecipientResolver {
                 ? NotificationType.NEW_PRIVATE_MESSAGE
                 : NotificationType.NEW_GROUP_MESSAGE;
         baseRecipients.forEach(userId ->
-                recipients.putIfAbsent(userId, ResolvedNotificationRecipient.builder()
+                upsertRecipientWithPriority(recipients, ResolvedNotificationRecipient.builder()
                         .userId(userId)
                         .type(baseType)
                         .build()));
 
         return List.copyOf(recipients.values());
+    }
+
+    private void upsertRecipientWithPriority(
+            Map<UUID, ResolvedNotificationRecipient> recipients,
+            ResolvedNotificationRecipient candidate) {
+        if (candidate == null || candidate.getUserId() == null) {
+            return;
+        }
+        recipients.merge(candidate.getUserId(), candidate, this::mergeByPriority);
+    }
+
+    private ResolvedNotificationRecipient mergeByPriority(
+            ResolvedNotificationRecipient existing,
+            ResolvedNotificationRecipient candidate) {
+        ResolvedNotificationRecipient preferred = priorityOf(existing.getType()) <= priorityOf(candidate.getType())
+                ? existing
+                : candidate;
+
+        return ResolvedNotificationRecipient.builder()
+                .userId(preferred.getUserId())
+                .type(preferred.getType())
+                .directMention(existing.isDirectMention() || candidate.isDirectMention())
+                .replyToRecipientMessage(existing.isReplyToRecipientMessage() || candidate.isReplyToRecipientMessage())
+                .recipientDirectlyAffected(existing.isRecipientDirectlyAffected() || candidate.isRecipientDirectlyAffected())
+                .build();
+    }
+
+    private int priorityOf(NotificationType type) {
+        if (type == NotificationType.GROUP_MENTION) {
+            return 1;
+        }
+        if (type == NotificationType.REPLY_TO_MY_MESSAGE) {
+            return 2;
+        }
+        if (type == NotificationType.NEW_PRIVATE_MESSAGE) {
+            return 3;
+        }
+        if (type == NotificationType.NEW_GROUP_MESSAGE) {
+            return 4;
+        }
+        return Integer.MAX_VALUE;
     }
 }

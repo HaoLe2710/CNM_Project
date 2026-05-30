@@ -1,9 +1,13 @@
 package fit.iuh.cnm_project_be.room.service;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import fit.iuh.cnm_project_be.common.exception.BusinessException;
 import fit.iuh.cnm_project_be.common.exception.ForbiddenException;
 import fit.iuh.cnm_project_be.common.exception.NotFoundException;
+import fit.iuh.cnm_project_be.message.entity.Message;
 import fit.iuh.cnm_project_be.realtime.dto.RealtimeEvent;
+import fit.iuh.cnm_project_be.notification.dto.NotificationDispatchResult;
+import fit.iuh.cnm_project_be.notification.service.NotificationDispatcher;
 import fit.iuh.cnm_project_be.room.dto.ConversationResponse;
 import fit.iuh.cnm_project_be.room.dto.CreateConversationRequest;
 import fit.iuh.cnm_project_be.room.entity.Conversation;
@@ -11,6 +15,7 @@ import fit.iuh.cnm_project_be.room.entity.ConversationMember;
 import fit.iuh.cnm_project_be.room.entity.ConversationUserSetting;
 import fit.iuh.cnm_project_be.room.enums.ConversationNotificationLevel;
 import fit.iuh.cnm_project_be.room.enums.ConversationType;
+import fit.iuh.cnm_project_be.room.enums.GroupConversationLabel;
 import fit.iuh.cnm_project_be.room.enums.MemberRole;
 import fit.iuh.cnm_project_be.room.repository.ConversationMemberRepository;
 import fit.iuh.cnm_project_be.room.repository.ConversationRepository;
@@ -18,15 +23,20 @@ import fit.iuh.cnm_project_be.room.repository.ConversationUserSettingRepository;
 import fit.iuh.cnm_project_be.user.entity.UserProfile;
 import fit.iuh.cnm_project_be.user.repository.UserProfileRepository;
 import fit.iuh.cnm_project_be.message.repository.MessageRepository;
+import fit.iuh.cnm_project_be.message.repository.MessageStatusRepository;
 import fit.iuh.cnm_project_be.message.repository.MessageUserStateRepository;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
+import org.mockito.Spy;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
 
+import java.time.Instant;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -35,6 +45,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.atLeastOnce;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
@@ -52,14 +63,40 @@ class ConversationServiceTest {
     @Mock
     private MessageRepository messageRepository;
     @Mock
+    private MessageStatusRepository messageStatusRepository;
+    @Mock
     private MessageUserStateRepository messageUserStateRepository;
     @Mock
     private UserProfileRepository userProfileRepository;
     @Mock
+    private NotificationDispatcher notificationDispatcher;
+    @Mock
     private SimpMessagingTemplate messagingTemplate;
+    @Spy
+    private ObjectMapper objectMapper = new ObjectMapper();
 
     @InjectMocks
     private ConversationService conversationService;
+
+    @BeforeEach
+    void setupConversationServiceDefaults() {
+        lenient().when(notificationDispatcher.dispatch(any()))
+                .thenReturn(NotificationDispatchResult.builder()
+                        .pushSuccessCount(0)
+                        .deniedRecipients(Map.of())
+                        .build());
+        lenient().when(messageRepository.save(any(Message.class)))
+                .thenAnswer(invocation -> {
+                    Message message = invocation.getArgument(0);
+                    if (message.getId() == null) {
+                        message.setId(1L);
+                    }
+                    if (message.getCreatedAt() == null) {
+                        message.setCreatedAt(Instant.now());
+                    }
+                    return message;
+                });
+    }
 
     @Test
     void createConversationReusesExistingPrivateConversation() {
@@ -864,6 +901,128 @@ class ConversationServiceTest {
     }
 
     @Test
+    void updateGroupLabelSuccess() {
+        UUID conversationId = UUID.randomUUID();
+        UUID userId = UUID.randomUUID();
+        Conversation conversation = groupConversation(conversationId, userId);
+
+        when(conversationRepository.findById(conversationId)).thenReturn(Optional.of(conversation));
+        when(conversationMemberRepository.findByConversationIdAndUserId(conversationId, userId))
+                .thenReturn(Optional.of(member(conversationId, userId, MemberRole.MEMBER)));
+        when(conversationUserSettingRepository.findByConversationIdAndUserId(conversationId, userId))
+                .thenReturn(Optional.empty());
+        when(conversationUserSettingRepository.save(any(ConversationUserSetting.class)))
+                .thenAnswer(invocation -> invocation.getArgument(0));
+
+        var response = conversationService.updateMyConversationGroupLabel(conversationId, userId, "WORK");
+
+        assertThat(response.getConversationId()).isEqualTo(conversationId);
+        assertThat(response.getUserId()).isEqualTo(userId);
+        assertThat(response.getGroupLabel()).isEqualTo("WORK");
+        assertThat(response.getGroupLabelDisplayName()).isEqualTo("Công việc");
+        assertThat(response.getGroupLabelColor()).isEqualTo("violet");
+        verify(conversationUserSettingRepository).save(any(ConversationUserSetting.class));
+    }
+
+    @Test
+    void clearGroupLabelSuccess() {
+        UUID conversationId = UUID.randomUUID();
+        UUID userId = UUID.randomUUID();
+        Conversation conversation = groupConversation(conversationId, userId);
+        ConversationUserSetting setting = new ConversationUserSetting();
+        setting.setConversationId(conversationId);
+        setting.setUserId(userId);
+        setting.setGroupLabel(GroupConversationLabel.FRIENDS);
+
+        when(conversationRepository.findById(conversationId)).thenReturn(Optional.of(conversation));
+        when(conversationMemberRepository.findByConversationIdAndUserId(conversationId, userId))
+                .thenReturn(Optional.of(member(conversationId, userId, MemberRole.MEMBER)));
+        when(conversationUserSettingRepository.findByConversationIdAndUserId(conversationId, userId))
+                .thenReturn(Optional.of(setting));
+        when(conversationUserSettingRepository.save(any(ConversationUserSetting.class)))
+                .thenAnswer(invocation -> invocation.getArgument(0));
+
+        var response = conversationService.updateMyConversationGroupLabel(conversationId, userId, null);
+
+        assertThat(response.getGroupLabel()).isNull();
+        assertThat(setting.getGroupLabel()).isNull();
+        verify(conversationUserSettingRepository).save(setting);
+    }
+
+    @Test
+    void updateGroupLabelNonMemberForbidden() {
+        UUID conversationId = UUID.randomUUID();
+        UUID userId = UUID.randomUUID();
+        Conversation conversation = groupConversation(conversationId, userId);
+
+        when(conversationRepository.findById(conversationId)).thenReturn(Optional.of(conversation));
+        when(conversationMemberRepository.findByConversationIdAndUserId(conversationId, userId))
+                .thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> conversationService.updateMyConversationGroupLabel(conversationId, userId, "WORK"))
+                .isInstanceOf(ForbiddenException.class)
+                .hasMessageContaining("does not belong");
+    }
+
+    @Test
+    void updateGroupLabelRejectsPrivateConversation() {
+        UUID conversationId = UUID.randomUUID();
+        UUID userId = UUID.randomUUID();
+        Conversation conversation = new Conversation();
+        conversation.setId(conversationId);
+        conversation.setType(ConversationType.PRIVATE);
+
+        when(conversationRepository.findById(conversationId)).thenReturn(Optional.of(conversation));
+        when(conversationMemberRepository.findByConversationIdAndUserId(conversationId, userId))
+                .thenReturn(Optional.of(member(conversationId, userId, MemberRole.MEMBER)));
+
+        assertThatThrownBy(() -> conversationService.updateMyConversationGroupLabel(conversationId, userId, "WORK"))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("Only group conversations");
+    }
+
+    @Test
+    void updateGroupLabelRejectsInvalidCode() {
+        UUID conversationId = UUID.randomUUID();
+        UUID userId = UUID.randomUUID();
+        Conversation conversation = groupConversation(conversationId, userId);
+
+        when(conversationRepository.findById(conversationId)).thenReturn(Optional.of(conversation));
+        when(conversationMemberRepository.findByConversationIdAndUserId(conversationId, userId))
+                .thenReturn(Optional.of(member(conversationId, userId, MemberRole.MEMBER)));
+
+        assertThatThrownBy(() -> conversationService.updateMyConversationGroupLabel(conversationId, userId, "INVALID"))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("Invalid group label");
+    }
+
+    @Test
+    void updateGroupLabelDoesNotAffectNotificationLevelAndCustomName() {
+        UUID conversationId = UUID.randomUUID();
+        UUID userId = UUID.randomUUID();
+        Conversation conversation = groupConversation(conversationId, userId);
+        ConversationUserSetting setting = new ConversationUserSetting();
+        setting.setConversationId(conversationId);
+        setting.setUserId(userId);
+        setting.setNotificationLevel(ConversationNotificationLevel.MENTIONS_ONLY);
+        setting.setCustomName("Local Alias");
+
+        when(conversationRepository.findById(conversationId)).thenReturn(Optional.of(conversation));
+        when(conversationMemberRepository.findByConversationIdAndUserId(conversationId, userId))
+                .thenReturn(Optional.of(member(conversationId, userId, MemberRole.MEMBER)));
+        when(conversationUserSettingRepository.findByConversationIdAndUserId(conversationId, userId))
+                .thenReturn(Optional.of(setting));
+        when(conversationUserSettingRepository.save(any(ConversationUserSetting.class)))
+                .thenAnswer(invocation -> invocation.getArgument(0));
+
+        conversationService.updateMyConversationGroupLabel(conversationId, userId, "PROJECT");
+
+        assertThat(setting.getGroupLabel()).isEqualTo(GroupConversationLabel.PROJECT);
+        assertThat(setting.getNotificationLevel()).isEqualTo(ConversationNotificationLevel.MENTIONS_ONLY);
+        assertThat(setting.getCustomName()).isEqualTo("Local Alias");
+    }
+
+    @Test
     void roomPreferenceRejectsNonMember() {
         UUID conversationId = UUID.randomUUID();
         UUID userId = UUID.randomUUID();
@@ -1028,6 +1187,46 @@ class ConversationServiceTest {
 
         assertThat(responses).hasSize(1);
         assertThat(responses.get(0).getNotificationLevel()).isEqualTo(ConversationNotificationLevel.NONE);
+    }
+
+    @Test
+    void getMyConversationsFiltersByGroupLabel() {
+        UUID userId = UUID.randomUUID();
+        UUID workGroupId = UUID.randomUUID();
+        UUID studyGroupId = UUID.randomUUID();
+        UUID privateConversationId = UUID.randomUUID();
+
+        Conversation workGroup = groupConversation(workGroupId, userId);
+        workGroup.setName("Work Group");
+        Conversation studyGroup = groupConversation(studyGroupId, userId);
+        studyGroup.setName("Study Group");
+        Conversation privateConversation = new Conversation();
+        privateConversation.setId(privateConversationId);
+        privateConversation.setCreatorId(userId);
+        privateConversation.setType(ConversationType.PRIVATE);
+
+        ConversationUserSetting workSetting = new ConversationUserSetting();
+        workSetting.setConversationId(workGroupId);
+        workSetting.setUserId(userId);
+        workSetting.setGroupLabel(GroupConversationLabel.WORK);
+
+        ConversationUserSetting studySetting = new ConversationUserSetting();
+        studySetting.setConversationId(studyGroupId);
+        studySetting.setUserId(userId);
+        studySetting.setGroupLabel(GroupConversationLabel.STUDY);
+
+        when(conversationRepository.findAllByMemberId(userId))
+                .thenReturn(List.of(workGroup, privateConversation, studyGroup));
+        when(conversationUserSettingRepository.findByUserIdAndConversationIdIn(any(), any()))
+                .thenReturn(List.of(workSetting, studySetting));
+        when(messageRepository.findVisibleMessages(any(), any(), any())).thenReturn(List.of());
+        when(messageUserStateRepository.countUnreadMessages(any(), any())).thenReturn(0L);
+
+        List<ConversationResponse> responses = conversationService.getMyConversations(userId, false, "WORK");
+
+        assertThat(responses).hasSize(1);
+        assertThat(responses.getFirst().getId()).isEqualTo(workGroupId);
+        assertThat(responses.getFirst().getGroupLabel()).isEqualTo("WORK");
     }
 
     @Test

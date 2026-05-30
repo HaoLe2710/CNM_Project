@@ -167,9 +167,28 @@ public class NotificationDispatcher {
     private String buildDedupKey(NotificationDispatchRequest request, UUID recipientId) {
         String prefix = request.getDedupKeyPrefix();
         if (prefix == null || prefix.isBlank()) {
-            prefix = request.getType().name().toLowerCase() + ":" + request.getTargetId();
+            prefix = request.getType().name() + ":" + resolveEventId(request);
         }
-        return prefix + ":recipient:" + recipientId;
+        return prefix + ":" + recipientId;
+    }
+
+    private String resolveEventId(NotificationDispatchRequest request) {
+        if (request.getTargetId() != null) {
+            return request.getTargetId().toString();
+        }
+        if (request.getMessageId() != null) {
+            return request.getMessageId().toString();
+        }
+        if (request.getCommentId() != null) {
+            return request.getCommentId().toString();
+        }
+        if (request.getPostId() != null) {
+            return request.getPostId().toString();
+        }
+        if (request.getConversationId() != null) {
+            return request.getConversationId().toString();
+        }
+        return "unknown";
     }
 
     private NotificationDispatchResult emptyResult() {

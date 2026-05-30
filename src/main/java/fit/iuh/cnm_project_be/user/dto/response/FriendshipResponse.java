@@ -1,5 +1,6 @@
 package fit.iuh.cnm_project_be.user.dto.response;
 
+import com.fasterxml.jackson.annotation.JsonProperty;
 import lombok.*;
 import lombok.experimental.FieldDefaults;
 
@@ -14,5 +15,8 @@ import java.util.UUID;
 public class FriendshipResponse {
     UUID friendshipId;
     Instant createdAt;
+    @JsonProperty("isCloseFriend")
+    boolean isCloseFriend;
+    String closeFriendNote;
     UserSummaryResponse friend;
 }

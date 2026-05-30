@@ -1,6 +1,7 @@
 package fit.iuh.cnm_project_be.message.service;
 
 import fit.iuh.cnm_project_be.message.dto.MessageReactionRequest;
+import fit.iuh.cnm_project_be.message.dto.MessageAttachmentPayload;
 import fit.iuh.cnm_project_be.message.dto.SendMessageRequest;
 import fit.iuh.cnm_project_be.message.entity.Message;
 import fit.iuh.cnm_project_be.message.entity.MessageReaction;
@@ -116,6 +117,7 @@ class MessageNotificationIntegrationTest {
         NotificationDispatchRequest request = captureSingleDispatch();
         assertThat(request.getType()).isEqualTo(NotificationType.NEW_PRIVATE_MESSAGE);
         assertThat(request.getExplicitRecipientIds()).containsExactly(recipientId);
+        assertThat(request.getDedupKeyPrefix()).isEqualTo("NEW_PRIVATE_MESSAGE:100");
     }
 
     @Test
@@ -190,7 +192,23 @@ class MessageNotificationIntegrationTest {
         NotificationDispatchRequest dispatch = captureSingleDispatch();
         assertThat(dispatch.getType()).isEqualTo(NotificationType.REACTION_TO_MY_MESSAGE);
         assertThat(dispatch.getExplicitRecipientIds()).containsExactly(authorId);
-        assertThat(dispatch.getDedupKeyPrefix()).isEqualTo("reaction:99");
+        assertThat(dispatch.getDedupKeyPrefix()).isEqualTo("REACTION_TO_MY_MESSAGE:99");
+    }
+
+    @Test
+    void sendAudioMessageDispatchesVoicePreviewNotification() {
+        UUID conversationId = UUID.randomUUID();
+        UUID senderId = UUID.randomUUID();
+        UUID recipientId = UUID.randomUUID();
+        mockConversation(conversationId, senderId, ConversationType.PRIVATE, List.of(senderId, recipientId));
+
+        messageService.sendMessage(senderId, audioRequest(conversationId));
+
+        NotificationDispatchRequest request = captureSingleDispatch();
+        assertThat(request.getType()).isEqualTo(NotificationType.NEW_PRIVATE_MESSAGE);
+        assertThat(request.getExplicitRecipientIds()).containsExactly(recipientId);
+        assertThat(request.getMetadata())
+                .containsEntry("messagePreview", "Đã gửi một tin nhắn thoại");
     }
 
     @Test
@@ -236,6 +254,22 @@ class MessageNotificationIntegrationTest {
         request.setConversationId(conversationId);
         request.setContent(content);
         request.setReplyToMessageId(replyToMessageId);
+        return request;
+    }
+
+    private SendMessageRequest audioRequest(UUID conversationId) {
+        MessageAttachmentPayload payload = new MessageAttachmentPayload();
+        payload.setUrl("https://cdn.example.com/chat/voice-1.webm");
+        payload.setStorageKey("chat/u1/voice-1.webm");
+        payload.setFileName("voice-1.webm");
+        payload.setContentType("audio/webm");
+        payload.setFileSize(30_000L);
+        payload.setType(MessageType.AUDIO);
+
+        SendMessageRequest request = new SendMessageRequest();
+        request.setConversationId(conversationId);
+        request.setMessageType(MessageType.AUDIO);
+        request.setAttachments(List.of(payload));
         return request;
     }
 

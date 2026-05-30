@@ -5,6 +5,8 @@ import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import lombok.Data;
 
+import java.util.List;
+
 @Data
 public class MessageAttachmentPayload {
 
@@ -23,4 +25,10 @@ public class MessageAttachmentPayload {
 
     @NotNull
     private MessageType type;
+
+    private Long durationMs;
+
+    private List<Double> waveform;
+
+    private String audioFormat;
 }

@@ -31,6 +31,9 @@ public class ConversationResponse {
     private ConversationBackgroundType backgroundType;
     private String backgroundColor;
     private String backgroundImageUrl;
+    private String groupLabel;
+    private String groupLabelDisplayName;
+    private String groupLabelColor;
     private String displayName;
     private UUID peerUserId;
     private String peerDisplayName;

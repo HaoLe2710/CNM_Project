@@ -61,6 +61,12 @@ class NotificationDispatcherTest {
         assertThat(result.getCreatedNotificationCount()).isEqualTo(1);
         assertThat(result.getPushSuccessCount()).isEqualTo(1);
         assertThat(result.getCreatedNotificationIds()).containsExactly(notificationId);
+
+        ArgumentCaptor<fit.iuh.cnm_project_be.notification.dto.CreateNotificationCommand> notificationCaptor =
+                ArgumentCaptor.forClass(fit.iuh.cnm_project_be.notification.dto.CreateNotificationCommand.class);
+        verify(inAppNotificationService).createAndPublish(notificationCaptor.capture());
+        assertThat(notificationCaptor.getValue().getDedupKey())
+                .isEqualTo("NEW_PRIVATE_MESSAGE:10:" + recipientId);
     }
 
     @Test
@@ -156,7 +162,7 @@ class NotificationDispatcherTest {
                 .actorId(actorId)
                 .explicitRecipientIds(recipients)
                 .metadata(Map.of("actorName", "An", "messagePreview", "secret"))
-                .dedupKeyPrefix("message:10:type:NEW_PRIVATE_MESSAGE")
+                .dedupKeyPrefix("NEW_PRIVATE_MESSAGE:10")
                 .build();
     }
 

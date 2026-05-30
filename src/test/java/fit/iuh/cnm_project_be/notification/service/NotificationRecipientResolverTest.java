@@ -113,6 +113,27 @@ class NotificationRecipientResolverTest {
         assertThat(result.get(0).getType()).isEqualTo(NotificationType.GROUP_MENTION);
     }
 
+    @Test
+    void messageRecipientsPrioritizeReplyOverPrivateMessage() {
+        UUID conversationId = UUID.randomUUID();
+        UUID senderId = UUID.randomUUID();
+        UUID originalAuthor = UUID.randomUUID();
+        Message message = message(conversationId, senderId);
+        message.setReplyToSenderId(originalAuthor);
+        when(memberRepository.findByConversationId(conversationId))
+                .thenReturn(List.of(member(conversationId, senderId), member(conversationId, originalAuthor)));
+
+        List<ResolvedNotificationRecipient> result = resolver.resolveMessageRecipients(
+                message,
+                conversation(conversationId, ConversationType.PRIVATE),
+                List.of());
+
+        assertThat(result).hasSize(1);
+        assertThat(result.get(0).getUserId()).isEqualTo(originalAuthor);
+        assertThat(result.get(0).getType()).isEqualTo(NotificationType.REPLY_TO_MY_MESSAGE);
+        assertThat(result.get(0).isReplyToRecipientMessage()).isTrue();
+    }
+
     private Conversation conversation(UUID id, ConversationType type) {
         Conversation conversation = new Conversation();
         conversation.setId(id);

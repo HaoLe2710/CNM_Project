@@ -9,5 +9,6 @@ public enum NotificationTargetType {
     USER,
     FRIEND_REQUEST,
     GROUP,
+    REMINDER,
     SYSTEM
 }

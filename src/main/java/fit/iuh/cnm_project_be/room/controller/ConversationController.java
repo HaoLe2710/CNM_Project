@@ -4,6 +4,8 @@ import fit.iuh.cnm_project_be.common.api.ApiResponse;
 import fit.iuh.cnm_project_be.room.dto.AddConversationMemberRequest;
 import fit.iuh.cnm_project_be.room.dto.ArchiveConversationRequest;
 import fit.iuh.cnm_project_be.room.dto.ConversationBackgroundUploadResponse;
+import fit.iuh.cnm_project_be.room.dto.ConversationGroupLabelPresetResponse;
+import fit.iuh.cnm_project_be.room.dto.ConversationGroupLabelResponse;
 import fit.iuh.cnm_project_be.room.dto.ConversationMemberRoleRequest;
 import fit.iuh.cnm_project_be.room.dto.ConversationResponse;
 import fit.iuh.cnm_project_be.room.dto.CreateConversationRequest;
@@ -12,6 +14,8 @@ import fit.iuh.cnm_project_be.room.dto.PinConversationRequest;
 import fit.iuh.cnm_project_be.room.dto.RenameConversationRequest;
 import fit.iuh.cnm_project_be.room.dto.UpdateConversationBackgroundRequest;
 import fit.iuh.cnm_project_be.room.dto.UpdateConversationCustomNameRequest;
+import fit.iuh.cnm_project_be.room.dto.UpdateConversationGroupLabelRequest;
+import fit.iuh.cnm_project_be.room.dto.UpdateConversationMemberNicknameRequest;
 import fit.iuh.cnm_project_be.room.dto.UpdateConversationNotificationLevelRequest;
 import fit.iuh.cnm_project_be.room.dto.UpdateConversationAvatarRequest;
 import fit.iuh.cnm_project_be.room.service.ConversationService;
@@ -44,9 +48,16 @@ public class ConversationController {
     @GetMapping
     public ApiResponse<List<ConversationResponse>> getMyConversations(
             @RequestHeader("x-user-id") UUID userId,
-            @RequestParam(defaultValue = "false") boolean archived) {
-        List<ConversationResponse> conversations = conversationService.getMyConversations(userId, archived);
+            @RequestParam(defaultValue = "false") boolean archived,
+            @RequestParam(required = false) String groupLabel) {
+        List<ConversationResponse> conversations = conversationService.getMyConversations(userId, archived, groupLabel);
         return ApiResponse.ok(conversations, UUID.randomUUID().toString());
+    }
+
+    @GetMapping("/group-labels")
+    public ApiResponse<List<ConversationGroupLabelPresetResponse>> getGroupLabelPresets(
+            @RequestHeader("x-user-id") UUID userId) {
+        return ApiResponse.ok(conversationService.getGroupLabelPresets(), UUID.randomUUID().toString());
     }
 
     @GetMapping("/created-by-me")
@@ -157,6 +168,25 @@ public class ConversationController {
         return ApiResponse.ok(null, UUID.randomUUID().toString());
     }
 
+    @GetMapping("/{conversationId}/group-label")
+    public ApiResponse<ConversationGroupLabelResponse> getConversationGroupLabel(
+            @PathVariable UUID conversationId,
+            @RequestHeader("x-user-id") UUID userId) {
+        return ApiResponse.ok(
+                conversationService.getMyConversationGroupLabel(conversationId, userId),
+                UUID.randomUUID().toString());
+    }
+
+    @PatchMapping("/{conversationId}/group-label")
+    public ApiResponse<ConversationGroupLabelResponse> updateConversationGroupLabel(
+            @PathVariable UUID conversationId,
+            @RequestBody UpdateConversationGroupLabelRequest request,
+            @RequestHeader("x-user-id") UUID userId) {
+        return ApiResponse.ok(
+                conversationService.updateMyConversationGroupLabel(conversationId, userId, request.getGroupLabel()),
+                UUID.randomUUID().toString());
+    }
+
     @PatchMapping("/{conversationId}/background")
     public ApiResponse<Void> updateBackground(
             @PathVariable UUID conversationId,
@@ -197,6 +227,17 @@ public class ConversationController {
             @PathVariable UUID memberUserId,
             @RequestHeader("x-user-id") UUID userId) {
         return ApiResponse.ok(conversationService.removeMember(conversationId, userId, memberUserId), UUID.randomUUID().toString());
+    }
+
+    @PatchMapping("/{conversationId}/members/{memberUserId}/nickname")
+    public ApiResponse<ConversationResponse> updateMemberNickname(
+            @PathVariable UUID conversationId,
+            @PathVariable UUID memberUserId,
+            @Valid @RequestBody UpdateConversationMemberNicknameRequest request,
+            @RequestHeader("x-user-id") UUID userId) {
+        return ApiResponse.ok(
+                conversationService.updateMemberNickname(conversationId, userId, memberUserId, request.getNickname()),
+                UUID.randomUUID().toString());
     }
 
     @PostMapping("/{conversationId}/leave")
