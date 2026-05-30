@@ -2,10 +2,11 @@ package fit.iuh.cnm_project_be.user.service;
 
 import fit.iuh.cnm_project_be.common.exception.BusinessException;
 import fit.iuh.cnm_project_be.common.exception.NotFoundException;
-import fit.iuh.cnm_project_be.realtime.dto.RealtimeEvent;
-import fit.iuh.cnm_project_be.realtime.dto.RealtimeEventType;
+import fit.iuh.cnm_project_be.notification.dto.NotificationDispatchRequest;
+import fit.iuh.cnm_project_be.notification.enums.NotificationTargetType;
+import fit.iuh.cnm_project_be.notification.enums.NotificationType;
+import fit.iuh.cnm_project_be.notification.service.NotificationDispatcher;
 import fit.iuh.cnm_project_be.user.dto.response.FriendRequestResponse;
-import fit.iuh.cnm_project_be.user.dto.response.FriendRealtimePayload;
 import fit.iuh.cnm_project_be.user.dto.response.FriendshipResponse;
 import fit.iuh.cnm_project_be.user.dto.response.UserSearchResponse;
 import fit.iuh.cnm_project_be.user.entity.FriendRequest;
@@ -19,19 +20,21 @@ import fit.iuh.cnm_project_be.user.repository.FriendshipRepository;
 import fit.iuh.cnm_project_be.user.repository.UserBlockRepository;
 import fit.iuh.cnm_project_be.user.repository.UserProfileRepository;
 import lombok.RequiredArgsConstructor;
-import org.springframework.messaging.simp.SimpMessagingTemplate;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
+import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.LinkedHashSet;
-import java.util.Set;
+import java.util.Map;
+import java.util.Objects;
 import java.util.UUID;
 
 @Service
 @RequiredArgsConstructor
+@Slf4j
 public class FriendService {
     private static final int SEARCH_LIMIT = 20;
 
@@ -41,7 +44,7 @@ public class FriendService {
     private final FriendshipRepository friendshipRepository;
     private final UserBlockRepository userBlockRepository;
     private final FriendMapper friendMapper;
-    private final SimpMessagingTemplate messagingTemplate;
+    private final NotificationDispatcher notificationDispatcher;
 
 
 //    Tìm user
@@ -99,15 +102,8 @@ public class FriendService {
         request.setUpdatedAt(Instant.now());
 
         FriendRequest savedRequest = friendRequestRepository.save(request);
-        FriendRequestResponse response = friendMapper.toRequestResponse(savedRequest, sender, receiver);
-        publishFriendRequestEvent(
-                RealtimeEventType.FRIEND_REQUEST_CREATED,
-                savedRequest,
-                sender,
-                receiver,
-                sender.getUserId()
-        );
-        return response;
+        safeDispatchFriendRequestReceived(savedRequest, sender, receiver);
+        return friendMapper.toRequestResponse(savedRequest, sender, receiver);
     }
 
 //    Lấy danh sách lời mời kết bạn đến
@@ -154,9 +150,6 @@ public class FriendService {
 
         ensureUsersAreNotBlocked(request.getSenderId(), request.getReceiverId());
 
-        UserProfile sender = userService.getUser(request.getSenderId());
-        UserProfile receiver = currentUser;
-
         request.setStatus(FriendRequestStatus.ACCEPTED);
         request.setUpdatedAt(Instant.now());
         FriendRequest savedRequest = friendRequestRepository.save(request);
@@ -165,16 +158,13 @@ public class FriendService {
             friendshipRepository.save(buildFriendship(request.getSenderId(), request.getReceiverId()));
             friendshipRepository.save(buildFriendship(request.getReceiverId(), request.getSenderId()));
         }
+        safeDispatchFriendRequestAccepted(savedRequest, currentUser, userService.getUser(savedRequest.getSenderId()));
 
-        FriendRequestResponse response = friendMapper.toRequestResponse(savedRequest, sender, receiver);
-        publishFriendRequestEvent(
-                RealtimeEventType.FRIEND_REQUEST_ACCEPTED,
+        return friendMapper.toRequestResponse(
                 savedRequest,
-                sender,
-                receiver,
-                currentUser.getUserId()
+                userService.getUser(savedRequest.getSenderId()),
+                currentUser
         );
-        return response;
     }
 //    Từ chối lời mời kết bạn
     @Transactional
@@ -188,35 +178,30 @@ public class FriendService {
             throw new BusinessException("Request is no longer pending");
         }
 
-        UserProfile sender = userService.getUser(request.getSenderId());
-        UserProfile receiver = currentUser;
-
         request.setStatus(FriendRequestStatus.REJECTED);
         request.setUpdatedAt(Instant.now());
 
         FriendRequest savedRequest = friendRequestRepository.save(request);
-        FriendRequestResponse response = friendMapper.toRequestResponse(savedRequest, sender, receiver);
-        publishFriendRequestEvent(
-                RealtimeEventType.FRIEND_REQUEST_REJECTED,
+        return friendMapper.toRequestResponse(
                 savedRequest,
-                sender,
-                receiver,
-                currentUser.getUserId()
+                userService.getUser(savedRequest.getSenderId()),
+                currentUser
         );
-        return response;
     }
-//    Lấy danh sách bạn bè
+    //    Lấy danh sách bạn bè
     @Transactional(readOnly = true)
     public List<FriendshipResponse> getFriends() {
-        UserProfile currentUser = userService.getMyProfile();
+        return getFriends(false);
+    }
 
-        return friendshipRepository.findByUserIdAndDeletedAtIsNullOrderByCreatedAtDesc(currentUser.getUserId())
-                .stream()
-                .map(friendship -> friendMapper.toFriendshipResponse(
-                        friendship,
-                        userService.getUser(friendship.getFriendId())
-                ))
-                .toList();
+    @Transactional(readOnly = true)
+    public List<FriendshipResponse> getFriends(boolean closeOnly) {
+        UserProfile currentUser = userService.getMyProfile();
+        List<Friendship> friendships = closeOnly
+                ? friendshipRepository.findByUserIdAndCloseFriendTrueAndDeletedAtIsNullOrderByCreatedAtDesc(currentUser.getUserId())
+                : friendshipRepository.findByUserIdAndDeletedAtIsNullOrderByCreatedAtDesc(currentUser.getUserId());
+
+        return mapFriendshipsToResponses(friendships);
     }
 //    Giải quyết trạng thái quan hệ giữa 2 user
     private FriendRelationshipStatus resolveRelationshipStatus(UUID currentUserId, UUID targetUserId) {
@@ -258,6 +243,100 @@ public class FriendService {
         return friendship;
     }
 
+    private List<FriendshipResponse> mapFriendshipsToResponses(List<Friendship> friendships) {
+        if (friendships == null || friendships.isEmpty()) {
+            return List.of();
+        }
+
+        List<UUID> friendIds = friendships.stream()
+                .map(Friendship::getFriendId)
+                .filter(Objects::nonNull)
+                .distinct()
+                .toList();
+        Map<UUID, UserProfile> profileById = userProfileRepository
+                .findByUserIdInAndDeletedAtIsNull(friendIds)
+                .stream()
+                .collect(LinkedHashMap::new, (acc, profile) -> acc.put(profile.getUserId(), profile), Map::putAll);
+
+        return friendships.stream()
+                .map(friendship -> {
+                    UserProfile friendProfile = profileById.get(friendship.getFriendId());
+                    if (friendProfile == null) {
+                        return null;
+                    }
+                    return friendMapper.toFriendshipResponse(friendship, friendProfile);
+                })
+                .filter(Objects::nonNull)
+                .toList();
+    }
+
+    private void safeDispatchFriendRequestReceived(
+            FriendRequest request,
+            UserProfile sender,
+            UserProfile receiver) {
+        if (notificationDispatcher == null || request == null || sender == null || receiver == null) {
+            return;
+        }
+        try {
+            notificationDispatcher.dispatch(NotificationDispatchRequest.builder()
+                    .type(NotificationType.FRIEND_REQUEST_RECEIVED)
+                    .targetType(NotificationTargetType.FRIEND_REQUEST)
+                    .actorId(sender.getUserId())
+                    .explicitRecipientIds(List.of(receiver.getUserId()))
+                    .metadata(Map.of(
+                            "actorName", displayName(sender),
+                            "friendRequestId", String.valueOf(request.getId())
+                    ))
+                    .dedupKeyPrefix("friend_request:" + request.getId())
+                    .recipientDirectlyAffected(true)
+                    .build());
+        } catch (Exception ex) {
+            log.warn("[FriendService] Notification dispatch failed for friend request {}: {}",
+                    request.getId(),
+                    ex.getMessage());
+        }
+    }
+
+    private void safeDispatchFriendRequestAccepted(
+            FriendRequest request,
+            UserProfile accepter,
+            UserProfile originalSender) {
+        if (notificationDispatcher == null || request == null || accepter == null || originalSender == null) {
+            return;
+        }
+        try {
+            notificationDispatcher.dispatch(NotificationDispatchRequest.builder()
+                    .type(NotificationType.FRIEND_REQUEST_ACCEPTED)
+                    .targetType(NotificationTargetType.FRIEND_REQUEST)
+                    .actorId(accepter.getUserId())
+                    .explicitRecipientIds(List.of(originalSender.getUserId()))
+                    .metadata(Map.of(
+                            "actorName", displayName(accepter),
+                            "friendRequestId", String.valueOf(request.getId())
+                    ))
+                    .dedupKeyPrefix("friend_request:" + request.getId() + ":accepted")
+                    .recipientDirectlyAffected(true)
+                    .build());
+        } catch (Exception ex) {
+            log.warn("[FriendService] Notification dispatch failed for accepted friend request {}: {}",
+                    request.getId(),
+                    ex.getMessage());
+        }
+    }
+
+    private String displayName(UserProfile userProfile) {
+        if (userProfile == null) {
+            return "Ai đó";
+        }
+        if (userProfile.getDisplayName() != null && !userProfile.getDisplayName().isBlank()) {
+            return userProfile.getDisplayName();
+        }
+        if (userProfile.getUsername() != null && !userProfile.getUsername().isBlank()) {
+            return userProfile.getUsername();
+        }
+        return "Ai đó";
+    }
+
     @Transactional
     public void unfriend(UUID friendUserId) {
         UserProfile currentUser = userService.getMyProfile();
@@ -276,55 +355,6 @@ public class FriendService {
 
         friendshipRepository.delete(mySide);
         friendshipRepository.delete(otherSide);
-        publishFriendshipRemoved(currentUser.getUserId(), friendUserId);
-    }
-
-    private void publishFriendRequestEvent(
-            RealtimeEventType eventType,
-            FriendRequest request,
-            UserProfile sender,
-            UserProfile receiver,
-            UUID actorUserId
-    ) {
-        FriendRequestResponse response = friendMapper.toRequestResponse(request, sender, receiver);
-        FriendRealtimePayload payload = FriendRealtimePayload.builder()
-                .requestId(request.getId())
-                .actorUserId(actorUserId)
-                .senderId(sender.getUserId())
-                .receiverId(receiver.getUserId())
-                .otherUserId(actorUserId != null && actorUserId.equals(sender.getUserId())
-                        ? receiver.getUserId()
-                        : sender.getUserId())
-                .requestStatus(request.getStatus())
-                .request(response)
-                .build();
-
-        publishToFriendTopic(Set.of(sender.getUserId(), receiver.getUserId()), eventType, payload);
-    }
-
-    private void publishFriendshipRemoved(UUID actorUserId, UUID otherUserId) {
-        FriendRealtimePayload payload = FriendRealtimePayload.builder()
-                .actorUserId(actorUserId)
-                .senderId(actorUserId)
-                .receiverId(otherUserId)
-                .otherUserId(otherUserId)
-                .build();
-
-        publishToFriendTopic(Set.of(actorUserId, otherUserId), RealtimeEventType.FRIENDSHIP_REMOVED, payload);
-    }
-
-    private void publishToFriendTopic(
-            Set<UUID> userIds,
-            RealtimeEventType eventType,
-            FriendRealtimePayload payload
-    ) {
-        Set<UUID> uniqueUserIds = new LinkedHashSet<>(userIds);
-        uniqueUserIds.stream()
-                .filter(userId -> userId != null)
-                .forEach(userId -> messagingTemplate.convertAndSend(
-                        "/topic/users/" + userId + "/friends",
-                        RealtimeEvent.of(eventType, payload)
-                ));
     }
 
 }

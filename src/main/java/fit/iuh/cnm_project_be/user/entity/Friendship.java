@@ -24,4 +24,10 @@ public class Friendship extends BaseEntity {
     @Column(name = "friend_id", nullable = false)
     private UUID friendId;
 
+    @Column(name = "is_close_friend", nullable = false)
+    private boolean closeFriend = false;
+
+    @Column(name = "close_friend_note")
+    private String closeFriendNote;
+
 }

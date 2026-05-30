@@ -11,6 +11,7 @@ import fit.iuh.cnm_project_be.user.dto.response.UserStorageFileItemResponse;
 import fit.iuh.cnm_project_be.user.dto.response.UserStorageSummaryResponse;
 import fit.iuh.cnm_project_be.user.entity.UserProfile;
 import fit.iuh.cnm_project_be.auth.service.AuthService;
+import fit.iuh.cnm_project_be.notification.service.DeviceTokenService;
 import fit.iuh.cnm_project_be.user.service.FriendService;
 import fit.iuh.cnm_project_be.user.service.UserSettingService;
 import fit.iuh.cnm_project_be.user.service.UserStorageService;
@@ -52,6 +53,7 @@ public class UserController {
     FriendService friendService;
     UserSettingService userSettingService;
     UserStorageService userStorageService;
+    DeviceTokenService deviceTokenService;
 
     @GetMapping("/profile")
     public ApiResponse<UserProfileResponse> getUserProfile() {
@@ -171,7 +173,14 @@ public class UserController {
             @AuthenticationPrincipal Jwt jwt,
             @RequestBody Map<String, String> body) {
         UUID userId = UUID.fromString(jwt.getClaimAsString("userId"));
-        userService.updateFcmToken(userId, body.get("token"));
+        String token = body.get("token");
+        userService.updateFcmToken(userId, token);
+        deviceTokenService.registerLegacyFcmToken(
+                userId,
+                token,
+                jwt.getClaimAsString("deviceId"),
+                jwt.getClaimAsString("platform")
+        );
         return ResponseEntity.ok().build();
     }
 }

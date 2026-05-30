@@ -16,6 +16,7 @@ public class ConversationMemberResponse {
     private UUID userId;
     private String username;
     private String displayName;
+    private String nickname;
     private String avatarUrl;
     private MemberRole role;
 }

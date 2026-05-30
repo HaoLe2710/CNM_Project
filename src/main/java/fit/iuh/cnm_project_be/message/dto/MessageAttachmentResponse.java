@@ -4,6 +4,8 @@ import fit.iuh.cnm_project_be.message.enums.MessageType;
 import lombok.Builder;
 import lombok.Data;
 
+import java.util.List;
+
 @Data
 @Builder
 public class MessageAttachmentResponse {
@@ -15,4 +17,7 @@ public class MessageAttachmentResponse {
     private String contentType;
     private Long fileSize;
     private MessageType type;
+    private Long durationMs;
+    private List<Double> waveform;
+    private String audioFormat;
 }

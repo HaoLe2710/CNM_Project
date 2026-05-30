@@ -3,13 +3,28 @@ package fit.iuh.cnm_project_be.room.service;
 import fit.iuh.cnm_project_be.common.exception.BusinessException;
 import fit.iuh.cnm_project_be.common.exception.ForbiddenException;
 import fit.iuh.cnm_project_be.common.exception.NotFoundException;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import fit.iuh.cnm_project_be.message.entity.Message;
+import fit.iuh.cnm_project_be.message.entity.MessageStatus;
+import fit.iuh.cnm_project_be.message.entity.MessageUserState;
+import fit.iuh.cnm_project_be.message.dto.MessageResponse;
 import fit.iuh.cnm_project_be.message.dto.UploadAttachmentResponse;
+import fit.iuh.cnm_project_be.message.enums.MessageDeliveryStatus;
+import fit.iuh.cnm_project_be.message.enums.MessageType;
 import fit.iuh.cnm_project_be.message.repository.MessageRepository;
+import fit.iuh.cnm_project_be.message.repository.MessageStatusRepository;
 import fit.iuh.cnm_project_be.message.repository.MessageUserStateRepository;
+import fit.iuh.cnm_project_be.notification.dto.NotificationDispatchRequest;
+import fit.iuh.cnm_project_be.notification.dto.NotificationDispatchResult;
+import fit.iuh.cnm_project_be.notification.enums.NotificationTargetType;
+import fit.iuh.cnm_project_be.notification.enums.NotificationType;
+import fit.iuh.cnm_project_be.notification.service.NotificationDispatcher;
 import fit.iuh.cnm_project_be.realtime.dto.RealtimeEvent;
 import fit.iuh.cnm_project_be.realtime.dto.RealtimeEventType;
 import fit.iuh.cnm_project_be.room.dto.ConversationMemberResponse;
+import fit.iuh.cnm_project_be.room.dto.ConversationGroupLabelPresetResponse;
+import fit.iuh.cnm_project_be.room.dto.ConversationGroupLabelResponse;
 import fit.iuh.cnm_project_be.room.dto.ConversationResponse;
 import fit.iuh.cnm_project_be.room.dto.ConversationStatusPayload;
 import fit.iuh.cnm_project_be.room.dto.ConversationBackgroundUploadResponse;
@@ -20,6 +35,7 @@ import fit.iuh.cnm_project_be.room.entity.ConversationUserSetting;
 import fit.iuh.cnm_project_be.room.enums.ConversationBackgroundType;
 import fit.iuh.cnm_project_be.room.enums.ConversationNotificationLevel;
 import fit.iuh.cnm_project_be.room.enums.ConversationType;
+import fit.iuh.cnm_project_be.room.enums.GroupConversationLabel;
 import fit.iuh.cnm_project_be.room.enums.MemberRole;
 import fit.iuh.cnm_project_be.room.repository.ConversationMemberRepository;
 import fit.iuh.cnm_project_be.room.repository.ConversationRepository;
@@ -37,8 +53,10 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.time.Instant;
+import java.util.Arrays;
 import java.util.Comparator;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -56,27 +74,38 @@ public class ConversationService {
     private final ConversationMemberRepository conversationMemberRepository;
     private final ConversationUserSettingRepository conversationUserSettingRepository;
     private final MessageRepository messageRepository;
+    private final MessageStatusRepository messageStatusRepository;
     private final MessageUserStateRepository messageUserStateRepository;
     private final UserBlockRepository userBlockRepository;
     private final UserProfileRepository userProfileRepository;
     private final S3MediaStorageService s3MediaStorageService;
+    private final NotificationDispatcher notificationDispatcher;
     private final SimpMessagingTemplate messagingTemplate;
+    private final ObjectMapper objectMapper;
+    private static final String GROUP_SYSTEM_PREFIX = "[[GROUP_SYSTEM]]";
     private static final int MAX_CONVERSATION_NAME_LENGTH = 100;
     private static final int MAX_CONVERSATION_AVATAR_URL_LENGTH = 500;
     private static final int MAX_CUSTOM_CONVERSATION_NAME_LENGTH = 100;
+    private static final int MAX_MEMBER_NICKNAME_LENGTH = 100;
     private static final int MAX_BACKGROUND_COLOR_LENGTH = 32;
     private static final int MAX_BACKGROUND_IMAGE_URL_LENGTH = 500;
 
     @Transactional(readOnly = true)
     public List<ConversationResponse> getMyConversations(UUID userId, boolean archived) {
+        return getMyConversations(userId, archived, null);
+    }
+
+    @Transactional(readOnly = true)
+    public List<ConversationResponse> getMyConversations(UUID userId, boolean archived, String groupLabelCode) {
+        GroupConversationLabel groupLabelFilter = normalizeGroupConversationLabel(groupLabelCode);
         List<Conversation> conversations = conversationRepository.findAllByMemberId(userId);
-        return mapConversationResponses(conversations, userId, archived);
+        return mapConversationResponses(conversations, userId, archived, groupLabelFilter);
     }
 
     @Transactional(readOnly = true)
     public List<ConversationResponse> getConversationsCreatedByMe(UUID creatorId, boolean archived) {
         List<Conversation> conversations = conversationRepository.findByCreatorIdAndDeletedAtIsNull(creatorId);
-        return mapConversationResponses(conversations, creatorId, archived);
+        return mapConversationResponses(conversations, creatorId, archived, null);
     }
 
     @Transactional
@@ -120,6 +149,8 @@ public class ConversationService {
                 conversationId,
                 actorUserId,
                 normalizedName);
+        createAndBroadcastGroupSystemMessage(savedConversation, actorUserId, "group_renamed", null,
+                Map.of("name", normalizedName));
         broadcastConversationUpdates(savedConversation.getId());
         ConversationResponse response = mapToResponse(savedConversation, actorUserId);
         logGroupLifecycleMembers("rename-group", response);
@@ -141,6 +172,8 @@ public class ConversationService {
 
         conversation.setAvatarUrl(normalizedAvatarUrl);
         Conversation savedConversation = conversationRepository.save(conversation);
+        createAndBroadcastGroupSystemMessage(savedConversation, actorUserId, "group_avatar_changed", null,
+                Map.of("avatarUrl", normalizedAvatarUrl));
         broadcastConversationUpdates(savedConversation.getId());
         ConversationResponse response = mapToResponse(savedConversation, actorUserId);
         logGroupLifecycleMembers("update-group-avatar", response);
@@ -168,6 +201,8 @@ public class ConversationService {
         conversationMemberRepository.save(actorMember);
         conversationMemberRepository.save(targetMember);
 
+        createAndBroadcastGroupSystemMessage(conversation, actorUserId, "group_owner_transferred", targetUserId,
+                Map.of());
         broadcastConversationUpdates(conversationId);
         ConversationResponse response = mapToResponse(conversation, actorUserId);
         logGroupLifecycleMembers("transfer-ownership", response);
@@ -189,6 +224,8 @@ public class ConversationService {
 
         targetMember.setRole(MemberRole.ADMIN);
         conversationMemberRepository.save(targetMember);
+        createAndBroadcastGroupSystemMessage(conversation, actorUserId, "group_admin_promoted", targetUserId,
+                Map.of());
         broadcastConversationUpdates(conversationId);
         ConversationResponse response = mapToResponse(conversation, actorUserId);
         logGroupLifecycleMembers("promote-admin", response);
@@ -213,6 +250,8 @@ public class ConversationService {
 
         targetMember.setRole(MemberRole.MEMBER);
         conversationMemberRepository.save(targetMember);
+        createAndBroadcastGroupSystemMessage(conversation, actorUserId, "group_admin_demoted", targetUserId,
+                Map.of());
         broadcastConversationUpdates(conversationId);
         ConversationResponse response = mapToResponse(conversation, actorUserId);
         logGroupLifecycleMembers("demote-admin", response);
@@ -234,10 +273,14 @@ public class ConversationService {
         List<ConversationMember> removedMembers = members.stream()
                 .filter(member -> !member.getUserId().equals(actorUserId))
                 .toList();
+        List<UUID> disbandRecipients = removedMembers.stream()
+                .map(ConversationMember::getUserId)
+                .toList();
         log.info("[GROUP DISBAND] conversationId={} ownerId={} memberCount={}",
                 conversationId,
                 actorUserId,
                 members.size());
+        safeDispatchGroupDisbandedNotification(conversation, actorUserId, disbandRecipients);
         removedMembers.forEach(member -> {
             log.info("[GROUP REMOVE MEMBERS] conversationId={} removedUserId={} role={}",
                     conversationId,
@@ -253,12 +296,31 @@ public class ConversationService {
     public void updateMutePreference(UUID conversationId, UUID actorUserId, boolean muted) {
         Conversation conversation = getConversationOrThrow(conversationId);
         ensureConversationMember(conversationId, actorUserId);
-        updateUserSetting(
-                conversation.getId(),
-                actorUserId,
-                muted,
-                ConversationUserSetting::getMutedAt,
-                ConversationUserSetting::setMutedAt);
+        ConversationUserSetting setting = conversationUserSettingRepository
+                .findByConversationIdAndUserId(conversation.getId(), actorUserId)
+                .orElse(null);
+
+        if (setting == null && !muted) {
+            return;
+        }
+        if (setting == null) {
+            setting = new ConversationUserSetting();
+            setting.setConversationId(conversation.getId());
+            setting.setUserId(actorUserId);
+        }
+
+        if (muted) {
+            Instant now = Instant.now();
+            setting.setMutedAt(now);
+            setting.setLastMutedAt(now);
+        } else {
+            setting.setMutedAt(null);
+            setting.setMutedUntil(null);
+            if (setting.getNotificationLevel() == ConversationNotificationLevel.NONE) {
+                setting.setNotificationLevel(ConversationNotificationLevel.ALL);
+            }
+        }
+        conversationUserSettingRepository.save(setting);
     }
 
     @Transactional
@@ -307,7 +369,15 @@ public class ConversationService {
             setting.setUserId(actorUserId);
         }
 
-        setting.setNotificationLevel(normalizedLevel == ConversationNotificationLevel.ALL ? null : normalizedLevel);
+        setting.setNotificationLevel(normalizedLevel);
+        if (normalizedLevel == ConversationNotificationLevel.NONE) {
+            Instant now = Instant.now();
+            setting.setMutedAt(now);
+            setting.setLastMutedAt(now);
+        } else if (normalizedLevel == ConversationNotificationLevel.ALL) {
+            setting.setMutedAt(null);
+            setting.setMutedUntil(null);
+        }
         conversationUserSettingRepository.save(setting);
     }
 
@@ -340,6 +410,58 @@ public class ConversationService {
         conversationUserSettingRepository.save(setting);
     }
 
+    @Transactional(readOnly = true)
+    public List<ConversationGroupLabelPresetResponse> getGroupLabelPresets() {
+        return Arrays.stream(GroupConversationLabel.values())
+                .map(label -> ConversationGroupLabelPresetResponse.builder()
+                        .code(label.name())
+                        .displayName(label.getDisplayName())
+                        .color(label.getColor())
+                        .build())
+                .toList();
+    }
+
+    @Transactional(readOnly = true)
+    public ConversationGroupLabelResponse getMyConversationGroupLabel(UUID conversationId, UUID actorUserId) {
+        Conversation conversation = getConversationOrThrow(conversationId);
+        ensureConversationMember(conversationId, actorUserId);
+        ensureGroupConversationForLabel(conversation);
+
+        ConversationUserSetting setting = findConversationUserSetting(conversationId, actorUserId);
+        return mapConversationGroupLabelResponse(conversationId, actorUserId, setting);
+    }
+
+    @Transactional
+    public ConversationGroupLabelResponse updateMyConversationGroupLabel(
+            UUID conversationId,
+            UUID actorUserId,
+            String groupLabelCode) {
+        Conversation conversation = getConversationOrThrow(conversationId);
+        ensureConversationMember(conversationId, actorUserId);
+        ensureGroupConversationForLabel(conversation);
+
+        GroupConversationLabel normalizedLabel = normalizeGroupConversationLabel(groupLabelCode);
+        ConversationUserSetting setting = findConversationUserSetting(conversationId, actorUserId);
+
+        if (setting == null && normalizedLabel == null) {
+            return mapConversationGroupLabelResponse(conversationId, actorUserId, null);
+        }
+
+        if (setting == null) {
+            setting = new ConversationUserSetting();
+            setting.setConversationId(conversationId);
+            setting.setUserId(actorUserId);
+        }
+
+        if (Objects.equals(setting.getGroupLabel(), normalizedLabel)) {
+            return mapConversationGroupLabelResponse(conversationId, actorUserId, setting);
+        }
+
+        setting.setGroupLabel(normalizedLabel);
+        ConversationUserSetting savedSetting = conversationUserSettingRepository.save(setting);
+        return mapConversationGroupLabelResponse(conversationId, actorUserId, savedSetting);
+    }
+
     @Transactional
     public void updateBackground(
             UUID conversationId,
@@ -364,6 +486,16 @@ public class ConversationService {
         conversation.setBackgroundColor(normalizedColor);
         conversation.setBackgroundImageUrl(normalizedImageUrl);
         Conversation savedConversation = conversationRepository.save(conversation);
+        Map<String, Object> metadata = new HashMap<>();
+        metadata.put("backgroundType", normalizedType.name());
+        if (normalizedColor != null) {
+            metadata.put("backgroundColor", normalizedColor);
+        }
+        if (normalizedImageUrl != null) {
+            metadata.put("backgroundImageUrl", normalizedImageUrl);
+        }
+        createAndBroadcastGroupSystemMessage(savedConversation, actorUserId, "group_background_changed", null,
+                metadata);
         broadcastConversationUpdates(savedConversation.getId());
     }
 
@@ -402,10 +534,48 @@ public class ConversationService {
         member.setJoinedAt(Instant.now());
         conversationMemberRepository.save(member);
 
+        createAndBroadcastGroupSystemMessage(conversation, actorUserId, "group_member_added", targetUserId,
+                Map.of());
         broadcastConversationUpdates(conversationId);
         ConversationResponse response = mapToResponse(conversation, actorUserId);
         logGroupLifecycleMembers("add-member", response);
         return response;
+    }
+
+    @Transactional
+    public ConversationResponse updateMemberNickname(
+            UUID conversationId,
+            UUID actorUserId,
+            UUID targetUserId,
+            String nickname) {
+        Conversation conversation = getConversationOrThrow(conversationId);
+        getMemberOrThrow(conversationId, actorUserId);
+        ConversationMember targetMember = getMemberOrThrow(conversationId, targetUserId);
+
+        ensureGroupConversation(conversation);
+
+        String normalizedNickname = normalizeMemberNickname(nickname);
+        String currentNickname = normalizeNullableText(targetMember.getNickname());
+
+        if (Objects.equals(currentNickname, normalizedNickname)) {
+            return mapToResponse(conversation, actorUserId);
+        }
+
+        targetMember.setNickname(normalizedNickname);
+        conversationMemberRepository.save(targetMember);
+
+        Map<String, Object> metadata = new HashMap<>();
+        if (normalizedNickname != null) {
+            metadata.put("nickname", normalizedNickname);
+        }
+        createAndBroadcastGroupSystemMessage(
+                conversation,
+                actorUserId,
+                "group_nickname_changed",
+                targetUserId,
+                metadata);
+        broadcastConversationUpdates(conversationId);
+        return mapToResponse(conversation, actorUserId);
     }
 
     @Transactional
@@ -426,6 +596,8 @@ public class ConversationService {
             throw new ForbiddenException("Only the owner can remove admins");
         }
 
+        createAndBroadcastGroupSystemMessage(conversation, actorUserId, "group_member_removed", targetUserId,
+                Map.of());
         conversationMemberRepository.deleteByConversationIdAndUserId(conversationId, targetUserId);
         broadcastConversationUpdates(conversationId);
         ConversationResponse response = mapToResponse(conversation, actorUserId);
@@ -444,6 +616,7 @@ public class ConversationService {
             throw new BusinessException("Owner cannot leave until ownership transfer is implemented");
         }
 
+        createAndBroadcastGroupSystemMessage(conversation, actorUserId, "group_left", actorUserId, Map.of());
         conversationMemberRepository.deleteByConversationIdAndUserId(conversationId, actorUserId);
 
         if (memberCount == 1) {
@@ -469,15 +642,18 @@ public class ConversationService {
         PrivatePeerInfo privatePeerInfo = resolvePrivatePeerInfo(conv, userId);
         String displayName = resolveDisplayName(conv, setting, privatePeerInfo);
         String avatarUrl = resolveAvatarUrl(conv, privatePeerInfo);
+        GroupConversationLabel groupLabel = conv.getType() == ConversationType.GROUP && setting != null
+                ? setting.getGroupLabel()
+                : null;
         ConversationResponse response = ConversationResponse.builder()
                 .id(conv.getId())
                 .name(conv.getName())
                 .avatarUrl(avatarUrl)
                 .type(String.valueOf(conv.getType()))
-                .lastMessage(lastMsg != null ? lastMsg.getContent() : "")
+                .lastMessage(lastMsg != null ? resolveConversationPreviewText(lastMsg) : "")
                 .lastMessageTime(lastMsg != null ? lastMsg.getCreatedAt() : conv.getCreatedAt())
                 .unreadCount(unreadCount)
-                .muted(setting != null && setting.getMutedAt() != null)
+                .muted(isMuted(setting))
                 .archived(setting != null && setting.getArchivedAt() != null)
                 .pinned(setting != null && setting.getPinnedAt() != null)
                 .notificationLevel(resolveNotificationLevel(setting))
@@ -485,6 +661,9 @@ public class ConversationService {
                 .backgroundType(resolveConversationBackgroundType(conv))
                 .backgroundColor(conv.getBackgroundColor())
                 .backgroundImageUrl(conv.getBackgroundImageUrl())
+                .groupLabel(groupLabel != null ? groupLabel.name() : null)
+                .groupLabelDisplayName(groupLabel != null ? groupLabel.getDisplayName() : null)
+                .groupLabelColor(groupLabel != null ? groupLabel.getColor() : null)
                 .displayName(displayName)
 
                 .peerUserId(privatePeerInfo.userId())
@@ -507,8 +686,11 @@ public class ConversationService {
         return response;
     }
 
-    private List<ConversationResponse> mapConversationResponses(List<Conversation> conversations, UUID userId,
-            boolean archived) {
+    private List<ConversationResponse> mapConversationResponses(
+            List<Conversation> conversations,
+            UUID userId,
+            boolean archived,
+            GroupConversationLabel groupLabelFilter) {
         Map<UUID, ConversationUserSetting> settingsByConversationId = getSettingsByConversationId(conversations,
                 userId);
 
@@ -517,6 +699,16 @@ public class ConversationService {
                     ConversationUserSetting setting = settingsByConversationId.get(conversation.getId());
                     boolean archivedState = setting != null && setting.getArchivedAt() != null;
                     return archivedState == archived;
+                })
+                .filter(conversation -> {
+                    if (groupLabelFilter == null) {
+                        return true;
+                    }
+                    if (conversation.getType() != ConversationType.GROUP) {
+                        return false;
+                    }
+                    ConversationUserSetting setting = settingsByConversationId.get(conversation.getId());
+                    return setting != null && setting.getGroupLabel() == groupLabelFilter;
                 })
                 .map(conversation -> new ConversationWithPreference(
                         mapToResponse(conversation, userId, settingsByConversationId.get(conversation.getId())),
@@ -585,6 +777,11 @@ public class ConversationService {
 
     private void broadcastConversationUpdates(UUID conversationId) {
         Conversation conversation = getConversationOrThrow(conversationId);
+        ConversationResponse sharedConversationPayload = mapToResponse(conversation, null);
+        messagingTemplate.convertAndSend(
+                "/topic/conversations/" + conversationId,
+                RealtimeEvent.of(RealtimeEventType.CONVERSATION_UPDATED, sharedConversationPayload));
+
         conversationMemberRepository.findByConversationId(conversationId).forEach(member -> {
             ConversationUserSetting setting = findConversationUserSetting(conversationId, member.getUserId());
             if (!shouldDeliverConversationRefresh(setting)) {
@@ -600,6 +797,216 @@ public class ConversationService {
             messagingTemplate.convertAndSend("/topic/users/" + member.getUserId() + "/conversations",
                     RealtimeEvent.of(RealtimeEventType.CONVERSATION_UPDATED, response));
         });
+        messagingTemplate.convertAndSend(
+                "/topic/conversations/" + conversationId,
+                RealtimeEvent.of(
+                        RealtimeEventType.CONVERSATION_UPDATED,
+                        Map.of(
+                                "id", conversation.getId(),
+                                "conversationId", conversation.getId(),
+                                "type", String.valueOf(conversation.getType()),
+                                "name", conversation.getName() != null ? conversation.getName() : "",
+                                "displayName", conversation.getName() != null ? conversation.getName() : "",
+                                "avatarUrl", conversation.getAvatarUrl() != null ? conversation.getAvatarUrl() : "",
+                                "backgroundType", resolveConversationBackgroundType(conversation),
+                                "backgroundColor", conversation.getBackgroundColor() != null ? conversation.getBackgroundColor() : "",
+                                "backgroundImageUrl", conversation.getBackgroundImageUrl() != null ? conversation.getBackgroundImageUrl() : "")));
+    }
+
+    private void createAndBroadcastGroupSystemMessage(
+            Conversation conversation,
+            UUID actorUserId,
+            String kind,
+            UUID targetUserId,
+            Map<String, ?> metadata) {
+        Message message = new Message();
+        message.setConversationId(conversation.getId());
+        message.setSenderId(actorUserId);
+        message.setMessageType(MessageType.SYSTEM);
+        message.setContent(buildGroupSystemMessageContent(conversation, actorUserId, kind, targetUserId, metadata));
+
+        Message savedMessage = messageRepository.save(message);
+        initializeSystemMessageStatuses(savedMessage.getId(), conversation.getId());
+        initializeSystemMessageUserStates(savedMessage.getId(), conversation.getId(), actorUserId);
+
+        MessageResponse response = MessageResponse.builder()
+                .id(savedMessage.getId())
+                .conversationId(savedMessage.getConversationId())
+                .senderId(actorUserId)
+                .senderDisplayName(resolveDisplayNameForUser(actorUserId))
+                .senderAvatarUrl(resolveAvatarUrlForUser(actorUserId))
+                .content(savedMessage.getContent())
+                .type(MessageType.SYSTEM)
+                .attachments(List.of())
+                .reactions(List.of())
+                .seen(true)
+                .createdAt(savedMessage.getCreatedAt())
+                .build();
+
+        messagingTemplate.convertAndSend("/topic/conversations/" + conversation.getId(),
+                RealtimeEvent.of(RealtimeEventType.MESSAGE_CREATED, response));
+    }
+
+    private String buildGroupSystemMessageContent(
+            Conversation conversation,
+            UUID actorUserId,
+            String kind,
+            UUID targetUserId,
+            Map<String, ?> metadata) {
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("kind", kind);
+        payload.put("actorId", actorUserId);
+        payload.put("actorName", resolveDisplayNameForUser(actorUserId));
+        payload.put("targetUserId", targetUserId);
+        payload.put("targetName", targetUserId != null ? resolveDisplayNameForUser(targetUserId) : null);
+        payload.put("conversationId", conversation.getId());
+        payload.put("conversationName", conversation.getName());
+        payload.put("createdAt", Instant.now().toString());
+        if (metadata != null) {
+            payload.putAll(metadata);
+        }
+
+        try {
+            return GROUP_SYSTEM_PREFIX + objectMapper.writeValueAsString(payload);
+        } catch (JsonProcessingException ex) {
+            log.warn("[GROUP SYSTEM MESSAGE] Failed to serialize payload kind={} conversationId={}",
+                    kind,
+                    conversation.getId(),
+                    ex);
+            return GROUP_SYSTEM_PREFIX + "{\"kind\":\"" + kind + "\"}";
+        }
+    }
+
+    private void initializeSystemMessageStatuses(Long messageId, UUID conversationId) {
+        Instant now = Instant.now();
+        conversationMemberRepository.findByConversationId(conversationId).forEach(member -> {
+            MessageStatus status = new MessageStatus();
+            status.setMessageId(messageId);
+            status.setUserId(member.getUserId());
+            status.setStatus(MessageDeliveryStatus.SENT);
+            status.setUpdatedAt(now);
+            messageStatusRepository.save(status);
+        });
+    }
+
+    private void initializeSystemMessageUserStates(Long messageId, UUID conversationId, UUID actorUserId) {
+        Instant now = Instant.now();
+        conversationMemberRepository.findByConversationId(conversationId).forEach(member -> {
+            MessageUserState state = new MessageUserState();
+            state.setMessageId(messageId);
+            state.setUserId(member.getUserId());
+            if (member.getUserId().equals(actorUserId)) {
+                state.setSeenAt(now);
+            }
+            messageUserStateRepository.save(state);
+        });
+    }
+
+    private String resolveConversationPreviewText(Message message) {
+        if (message.getMessageType() == MessageType.SYSTEM) {
+            return resolveGroupSystemPreviewText(message.getContent());
+        }
+
+        return message.getContent();
+    }
+
+    private String resolveGroupSystemPreviewText(String content) {
+        Map<String, Object> payload = parseGroupSystemPayload(content);
+        String kind = String.valueOf(payload.getOrDefault("kind", ""));
+        String actorName = String.valueOf(payload.getOrDefault("actorName", "Ai đó"));
+        String targetName = String.valueOf(payload.getOrDefault("targetName", "một thành viên"));
+        String nickname = String.valueOf(payload.getOrDefault("nickname", ""));
+        String conversationName = String.valueOf(payload.getOrDefault("conversationName", "nhóm"));
+
+        return switch (kind) {
+            case "group_member_added" -> actorName + " đã thêm " + targetName + " vào nhóm";
+            case "group_member_removed" -> actorName + " đã xóa " + targetName + " khỏi nhóm";
+            case "group_left" -> actorName + " đã rời nhóm";
+            case "group_admin_promoted" -> actorName + " đã cấp phó nhóm cho " + targetName;
+            case "group_admin_demoted" -> actorName + " đã thu hồi phó nhóm của " + targetName;
+            case "group_owner_transferred" -> actorName + " đã chuyển quyền trưởng nhóm cho " + targetName;
+            case "group_renamed" -> actorName + " đã đổi tên nhóm";
+            case "group_avatar_changed" -> actorName + " đã cập nhật ảnh nhóm";
+            case "group_background_changed" -> actorName + " đã đổi nền chat";
+            case "group_nickname_changed" -> {
+                if (nickname != null && !nickname.isBlank()) {
+                    yield actorName + " đã đổi biệt danh của " + targetName + " thành \"" + nickname + "\"";
+                }
+                yield actorName + " đã xóa biệt danh của " + targetName;
+            }
+            case "group_disbanded" -> actorName + " đã giải tán nhóm " + conversationName;
+            default -> "Hoạt động nhóm";
+        };
+    }
+
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> parseGroupSystemPayload(String content) {
+        String normalized = content == null ? "" : content.trim();
+        if (!normalized.startsWith(GROUP_SYSTEM_PREFIX)) {
+            return Map.of();
+        }
+
+        try {
+            Object value = objectMapper.readValue(normalized.substring(GROUP_SYSTEM_PREFIX.length()), Map.class);
+            return value instanceof Map<?, ?> map
+                    ? (Map<String, Object>) map
+                    : Map.of();
+        } catch (JsonProcessingException ex) {
+            return Map.of();
+        }
+    }
+
+    private String resolveDisplayNameForUser(UUID userId) {
+        return userProfileRepository.findById(userId)
+                .map(profile -> resolveUserDisplayName(profile, userId))
+                .orElse(userId != null ? userId.toString() : "Người dùng");
+    }
+
+    private String resolveAvatarUrlForUser(UUID userId) {
+        return userProfileRepository.findById(userId)
+                .map(UserProfile::getAvatarUrl)
+                .map(this::normalizeNullableText)
+                .orElse(null);
+    }
+
+    private void safeDispatchGroupDisbandedNotification(
+            Conversation conversation,
+            UUID actorUserId,
+            List<UUID> recipientIds) {
+        if (conversation == null || actorUserId == null || recipientIds == null || recipientIds.isEmpty()) {
+            return;
+        }
+
+        try {
+            NotificationDispatchResult result = notificationDispatcher.dispatch(
+                    NotificationDispatchRequest.builder()
+                            .type(NotificationType.GROUP_DISBANDED)
+                            .targetType(NotificationTargetType.CONVERSATION)
+                            .targetId(conversation.getId())
+                            .actorId(actorUserId)
+                            .conversationId(conversation.getId())
+                            .explicitRecipientIds(recipientIds)
+                            .recipientDirectlyAffected(true)
+                            .metadata(Map.of(
+                                    "actorName", resolveDisplayNameForUser(actorUserId),
+                                    "conversationName",
+                                    (conversation.getName() != null && !conversation.getName().isBlank())
+                                            ? conversation.getName()
+                                            : "Nhóm"))
+                            .dedupKeyPrefix("group:" + conversation.getId() + ":disbanded")
+                            .build());
+            log.info("[GROUP DISBAND NOTIFICATION] conversationId={} actorUserId={} recipients={} pushSuccess={} denied={}",
+                    conversation.getId(),
+                    actorUserId,
+                    recipientIds.size(),
+                    result.getPushSuccessCount(),
+                    result.getDeniedRecipients().size());
+        } catch (Exception ex) {
+            log.warn("[GROUP DISBAND NOTIFICATION] dispatch failed conversationId={} actorUserId={} reason={}",
+                    conversation.getId(),
+                    actorUserId,
+                    ex.getMessage());
+        }
     }
 
     private void broadcastConversationDeleted(UUID conversationId, List<ConversationMember> members, boolean isDisbanded) {
@@ -648,6 +1055,21 @@ public class ConversationService {
                 .orElse(null);
     }
 
+    private ConversationGroupLabelResponse mapConversationGroupLabelResponse(
+            UUID conversationId,
+            UUID userId,
+            ConversationUserSetting setting) {
+        GroupConversationLabel label = setting != null ? setting.getGroupLabel() : null;
+        return ConversationGroupLabelResponse.builder()
+                .conversationId(conversationId)
+                .userId(userId)
+                .groupLabel(label != null ? label.name() : null)
+                .groupLabelDisplayName(label != null ? label.getDisplayName() : null)
+                .groupLabelColor(label != null ? label.getColor() : null)
+                .updatedAt(setting != null ? setting.getUpdatedAt() : null)
+                .build();
+    }
+
     private ConversationMember getMemberOrThrow(UUID conversationId, UUID userId) {
         return conversationMemberRepository.findByConversationIdAndUserId(conversationId, userId)
                 .orElseThrow(() -> new ForbiddenException("User does not belong to this conversation"));
@@ -660,6 +1082,12 @@ public class ConversationService {
     private void ensureGroupConversation(Conversation conversation) {
         if (conversation.getType() != ConversationType.GROUP) {
             throw new BusinessException("Only group conversations support membership changes");
+        }
+    }
+
+    private void ensureGroupConversationForLabel(Conversation conversation) {
+        if (conversation.getType() != ConversationType.GROUP) {
+            throw new BusinessException("Only group conversations support group labels");
         }
     }
 
@@ -748,10 +1176,38 @@ public class ConversationService {
         return notificationLevel;
     }
 
+    private GroupConversationLabel normalizeGroupConversationLabel(String groupLabelCode) {
+        if (groupLabelCode == null) {
+            return null;
+        }
+
+        String normalizedCode = groupLabelCode.trim();
+        if (normalizedCode.isEmpty()) {
+            return null;
+        }
+
+        return GroupConversationLabel.fromCode(normalizedCode)
+                .orElseThrow(() -> new BusinessException("Invalid group label"));
+    }
+
     private ConversationNotificationLevel resolveNotificationLevel(ConversationUserSetting setting) {
         return setting != null && setting.getNotificationLevel() != null
                 ? setting.getNotificationLevel()
                 : ConversationNotificationLevel.ALL;
+    }
+
+    private boolean isMuted(ConversationUserSetting setting) {
+        if (setting == null) {
+            return false;
+        }
+        ConversationNotificationLevel notificationLevel = resolveNotificationLevel(setting);
+        if (notificationLevel == ConversationNotificationLevel.NONE) {
+            return true;
+        }
+        if (setting.getMutedUntil() != null) {
+            return setting.getMutedUntil().isAfter(Instant.now());
+        }
+        return setting.getMutedAt() != null;
     }
 
     private boolean shouldDeliverConversationRefresh(ConversationUserSetting setting) {
@@ -798,6 +1254,22 @@ public class ConversationService {
         }
 
         return normalizedCustomName;
+    }
+
+    private String normalizeMemberNickname(String nickname) {
+        if (nickname == null) {
+            return null;
+        }
+
+        String normalizedNickname = nickname.trim();
+        if (normalizedNickname.isEmpty()) {
+            return null;
+        }
+        if (normalizedNickname.length() > MAX_MEMBER_NICKNAME_LENGTH) {
+            throw new BusinessException("Member nickname must be less than 100 characters");
+        }
+
+        return normalizedNickname;
     }
 
     private ConversationBackgroundType normalizeBackgroundType(ConversationBackgroundType backgroundType) {
@@ -894,6 +1366,7 @@ public class ConversationService {
                 .userId(member.getUserId())
                 .username(userProfile != null ? normalizeNullableText(userProfile.getUsername()) : null)
                 .displayName(resolveUserDisplayName(userProfile, member.getUserId()))
+                .nickname(normalizeNullableText(member.getNickname()))
                 .avatarUrl(userProfile != null ? normalizeNullableText(userProfile.getAvatarUrl()) : null)
                 .role(member.getRole())
                 .build();

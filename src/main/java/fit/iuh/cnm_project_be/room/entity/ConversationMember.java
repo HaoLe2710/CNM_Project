@@ -30,4 +30,7 @@ public class ConversationMember {
 
     @Column(name = "joined_at", nullable = false)
     private Instant joinedAt = Instant.now();
+
+    @Column(name = "nickname")
+    private String nickname;
 }

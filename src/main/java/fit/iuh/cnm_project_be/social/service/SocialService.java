@@ -4,6 +4,10 @@ import fit.iuh.cnm_project_be.common.exception.BusinessException;
 import fit.iuh.cnm_project_be.common.exception.NotFoundException;
 import fit.iuh.cnm_project_be.message.dto.UploadAttachmentResponse;
 import fit.iuh.cnm_project_be.message.enums.MessageType;
+import fit.iuh.cnm_project_be.notification.dto.NotificationDispatchRequest;
+import fit.iuh.cnm_project_be.notification.enums.NotificationTargetType;
+import fit.iuh.cnm_project_be.notification.enums.NotificationType;
+import fit.iuh.cnm_project_be.notification.service.NotificationDispatcher;
 import fit.iuh.cnm_project_be.social.dto.request.CreateMomentRequest;
 import fit.iuh.cnm_project_be.social.dto.request.CreateMomentCommentRequest;
 import fit.iuh.cnm_project_be.social.dto.request.CreatePostCommentRequest;
@@ -31,6 +35,7 @@ import fit.iuh.cnm_project_be.social.entity.PostVisibilityGrant;
 import fit.iuh.cnm_project_be.social.entity.MomentReaction;
 import fit.iuh.cnm_project_be.social.entity.MomentView;
 import fit.iuh.cnm_project_be.social.enums.MediaType;
+import fit.iuh.cnm_project_be.social.enums.MomentAudioMode;
 import fit.iuh.cnm_project_be.social.enums.MomentVisibilityMode;
 import fit.iuh.cnm_project_be.social.enums.PostInteractionScope;
 import fit.iuh.cnm_project_be.social.enums.PostVisibilityMode;
@@ -54,6 +59,7 @@ import fit.iuh.cnm_project_be.user.repository.UserBlockRepository;
 import fit.iuh.cnm_project_be.user.repository.FriendshipRepository;
 import fit.iuh.cnm_project_be.user.service.UserService;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -63,20 +69,26 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import java.util.Base64;
 import java.nio.charset.StandardCharsets;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 @Service
 @RequiredArgsConstructor
+@Slf4j
 public class SocialService {
 
     private static final int DEFAULT_PAGE_SIZE = 20;
     private static final int MAX_PAGE_SIZE = 50;
     private static final int VIDEO_CANDIDATE_MULTIPLIER = 3;
     private static final int STORY_WINDOW_HOURS = 24;
+    private static final Pattern MENTION_PATTERN = Pattern.compile("@([\\p{L}\\p{N}_.-]+)");
 
     private final PostRepository postRepository;
     private final PostLikeRepository postLikeRepository;
@@ -93,6 +105,7 @@ public class SocialService {
     private final UserBlockRepository userBlockRepository;
     private final UserService userService;
     private final S3MediaStorageService s3MediaStorageService;
+    private final NotificationDispatcher notificationDispatcher;
 
     @Transactional(readOnly = true)
     public List<PostResponse> getFriendPostFeed(Integer size) {
@@ -133,6 +146,7 @@ public class SocialService {
         Post savedPost = postRepository.save(post);
         savePostMedia(savedPost.getId(), mediaItems);
         syncPostAudience(savedPost, currentUser.getUserId(), request.getAllowedViewerIds(), request.getTaggedFriendIds());
+        safeDispatchPostTagged(savedPost, currentUser.getUserId(), request.getTaggedFriendIds());
         return toPostResponse(savedPost, currentUser.getUserId());
     }
 
@@ -167,6 +181,7 @@ public class SocialService {
         Post savedPost = postRepository.save(post);
         savePostMedia(savedPost.getId(), mediaItems);
         syncPostAudience(savedPost, currentUserId, allowedViewerIds, taggedFriendIds);
+        safeDispatchPostTagged(savedPost, currentUserId, taggedFriendIds);
         return toPostResponse(savedPost, currentUserId);
     }
 
@@ -204,7 +219,8 @@ public class SocialService {
             PostLike postLike = new PostLike();
             postLike.setPostId(postId);
             postLike.setUserId(currentUserId);
-            postLikeRepository.save(postLike);
+            PostLike savedLike = postLikeRepository.save(postLike);
+            safeDispatchPostReaction(post, currentUserId, savedLike.getId(), false);
         }
 
         return toPostResponse(post, currentUserId);
@@ -221,14 +237,18 @@ public class SocialService {
     @Transactional
     public PostCommentResponse addComment(UUID postId, CreatePostCommentRequest request) {
         UUID currentUserId = currentUser().getUserId();
-        getInteractablePost(postId, currentUserId);
+        Post post = getInteractablePost(postId, currentUserId);
 
         PostComment comment = new PostComment();
         comment.setPostId(postId);
         comment.setUserId(currentUserId);
         comment.setContent(request.getContent().trim());
 
-        return toPostCommentResponse(postCommentRepository.save(comment), currentUserId, List.of());
+        PostComment savedComment = postCommentRepository.save(comment);
+        Set<UUID> mentionedUserIds = resolveMentionedUserIds(savedComment.getContent(), post, currentUserId);
+        safeDispatchCommentMentions(post, savedComment, currentUserId, mentionedUserIds);
+        safeDispatchPostComment(post, savedComment, currentUserId, mentionedUserIds);
+        return toPostCommentResponse(savedComment, currentUserId, List.of());
     }
 
     @Transactional
@@ -243,7 +263,13 @@ public class SocialService {
         reply.setParentCommentId(parentComment.getId());
         reply.setContent(request.getContent().trim());
 
-        return toPostCommentResponse(postCommentRepository.save(reply), currentUserId, List.of());
+        PostComment savedReply = postCommentRepository.save(reply);
+        Post post = getVisiblePost(parentComment.getPostId(), currentUserId);
+        Set<UUID> mentionedUserIds = resolveMentionedUserIds(savedReply.getContent(), post, currentUserId);
+        safeDispatchCommentMentions(post, savedReply, currentUserId, mentionedUserIds);
+        safeDispatchCommentReply(post, parentComment, savedReply, currentUserId, mentionedUserIds);
+        safeDispatchPostComment(post, savedReply, currentUserId, union(mentionedUserIds, parentComment.getUserId()));
+        return toPostCommentResponse(savedReply, currentUserId, List.of());
     }
 
     @Transactional
@@ -321,6 +347,7 @@ public class SocialService {
     @Transactional
     public MomentResponse createMoment(CreateMomentRequest request) {
         UserProfile currentUser = currentUser();
+        MomentAudioSelection audioSelection = resolveAndValidateMomentAudio(request);
 
         Moment moment = new Moment();
         moment.setUserId(currentUser.getUserId());
@@ -330,6 +357,12 @@ public class SocialService {
         moment.setCoverUrl(trimToNull(request.getCoverUrl()));
         moment.setDurationSeconds(request.getDurationSeconds() == null ? 0 : Math.max(request.getDurationSeconds(), 0));
         moment.setVisibilityMode(request.getVisibilityMode() == null ? MomentVisibilityMode.FRIENDS : request.getVisibilityMode());
+        moment.setAudioMode(audioSelection.audioMode());
+        moment.setMusicTrackId(audioSelection.musicTrackId());
+        moment.setMusicTitle(audioSelection.musicTitle());
+        moment.setMusicArtist(audioSelection.musicArtist());
+        moment.setMusicUrl(audioSelection.musicUrl());
+        moment.setMusicStartSeconds(audioSelection.musicStartSeconds());
 
         return toMomentResponse(momentRepository.save(moment));
     }
@@ -458,7 +491,8 @@ public class SocialService {
             reaction.setMomentId(momentId);
             reaction.setUserId(currentUserId);
             reaction.setReactionType(ReactionType.LIKE);
-            momentReactionRepository.save(reaction);
+            MomentReaction savedReaction = momentReactionRepository.save(reaction);
+            safeDispatchPostReaction(moment, currentUserId, savedReaction.getId(), true);
         }
         return toMomentResponse(moment);
     }
@@ -489,7 +523,9 @@ public class SocialService {
         comment.setMomentId(moment.getId());
         comment.setUserId(currentUserId);
         comment.setContent(request.getContent().trim());
-        return toMomentCommentResponse(momentCommentRepository.save(comment));
+        MomentComment savedComment = momentCommentRepository.save(comment);
+        safeDispatchMomentComment(moment, savedComment, currentUserId);
+        return toMomentCommentResponse(savedComment);
     }
 
     @Transactional
@@ -681,6 +717,12 @@ public class SocialService {
                 .caption(moment.getCaption())
                 .durationSeconds(moment.getDurationSeconds())
                 .visibilityMode(moment.getVisibilityMode())
+                .audioMode(moment.getAudioMode())
+                .musicTrackId(moment.getMusicTrackId())
+                .musicTitle(moment.getMusicTitle())
+                .musicArtist(moment.getMusicArtist())
+                .musicUrl(moment.getMusicUrl())
+                .musicStartSeconds(moment.getMusicStartSeconds())
                 .likeCount(momentReactionRepository.countByMomentId(moment.getId()))
                 .commentCount(momentCommentRepository.countByMomentIdAndDeletedAtIsNull(moment.getId()))
                 .shareCount(moment.getShareCount() == null ? 0L : moment.getShareCount())
@@ -784,6 +826,205 @@ public class SocialService {
                 .toList();
     }
 
+    private void safeDispatchPostTagged(Post post, UUID actorId, List<UUID> taggedFriendIds) {
+        if (notificationDispatcher == null || post == null || taggedFriendIds == null || taggedFriendIds.isEmpty()) {
+            return;
+        }
+        List<UUID> recipients = taggedFriendIds.stream()
+                .filter(userId -> userId != null && !userId.equals(actorId))
+                .distinct()
+                .filter(userId -> canViewPost(post, userId))
+                .toList();
+        if (recipients.isEmpty()) {
+            return;
+        }
+        safeDispatchSocial(NotificationType.POST_TAGGED,
+                NotificationTargetType.POST,
+                actorId,
+                recipients,
+                post.getId(),
+                null,
+                "post:" + post.getId() + ":type:TAGGED",
+                Map.of("postId", post.getId().toString()),
+                true);
+    }
+
+    private void safeDispatchPostReaction(Post post, UUID actorId, UUID reactionId, boolean moment) {
+        if (post == null) {
+            return;
+        }
+        safeDispatchPostReaction(post.getId(), post.getUserId(), actorId, reactionId, moment);
+    }
+
+    private void safeDispatchPostReaction(Moment moment, UUID actorId, Long reactionId, boolean momentEvent) {
+        if (moment == null) {
+            return;
+        }
+        safeDispatchPostReaction(moment.getId(), moment.getUserId(), actorId, reactionId, momentEvent);
+    }
+
+    private void safeDispatchPostReaction(UUID targetPostId, UUID ownerId, UUID actorId, Object reactionId, boolean moment) {
+        if (ownerId == null || ownerId.equals(actorId)) {
+            return;
+        }
+        safeDispatchSocial(NotificationType.POST_REACTION,
+                NotificationTargetType.POST,
+                actorId,
+                List.of(ownerId),
+                targetPostId,
+                null,
+                "reaction:" + reactionId,
+                Map.of(
+                        "postId", targetPostId.toString(),
+                        "objectType", moment ? "MOMENT" : "POST",
+                        "reactionId", String.valueOf(reactionId)
+                ),
+                true);
+    }
+
+    private void safeDispatchPostComment(
+            Post post,
+            PostComment comment,
+            UUID actorId,
+            Set<UUID> alreadyNotified) {
+        if (post == null || comment == null || post.getUserId().equals(actorId) || alreadyNotified.contains(post.getUserId())) {
+            return;
+        }
+        safeDispatchSocial(NotificationType.POST_COMMENT,
+                NotificationTargetType.COMMENT,
+                actorId,
+                List.of(post.getUserId()),
+                post.getId(),
+                comment.getId(),
+                "comment:" + comment.getId() + ":type:POST_COMMENT",
+                Map.of(
+                        "postId", post.getId().toString(),
+                        "commentId", comment.getId().toString(),
+                        "commentPreview", buildCommentPreview(comment.getContent())
+                ),
+                true);
+    }
+
+    private void safeDispatchMomentComment(Moment moment, MomentComment comment, UUID actorId) {
+        if (moment == null || comment == null || moment.getUserId().equals(actorId)) {
+            return;
+        }
+        safeDispatchSocial(NotificationType.POST_COMMENT,
+                NotificationTargetType.COMMENT,
+                actorId,
+                List.of(moment.getUserId()),
+                moment.getId(),
+                comment.getId(),
+                "comment:" + comment.getId() + ":type:MOMENT_COMMENT",
+                Map.of(
+                        "postId", moment.getId().toString(),
+                        "commentId", comment.getId().toString(),
+                        "objectType", "MOMENT",
+                        "commentPreview", buildCommentPreview(comment.getContent())
+                ),
+                true);
+    }
+
+    private void safeDispatchCommentReply(
+            Post post,
+            PostComment parentComment,
+            PostComment reply,
+            UUID actorId,
+            Set<UUID> alreadyNotified) {
+        if (post == null || parentComment == null || reply == null
+                || parentComment.getUserId().equals(actorId)
+                || alreadyNotified.contains(parentComment.getUserId())) {
+            return;
+        }
+        safeDispatchSocial(NotificationType.COMMENT_REPLY,
+                NotificationTargetType.COMMENT,
+                actorId,
+                List.of(parentComment.getUserId()),
+                post.getId(),
+                reply.getId(),
+                "comment:" + reply.getId() + ":reply-recipient",
+                Map.of(
+                        "postId", post.getId().toString(),
+                        "commentId", reply.getId().toString(),
+                        "parentCommentId", parentComment.getId().toString(),
+                        "commentPreview", buildCommentPreview(reply.getContent())
+                ),
+                true);
+    }
+
+    private void safeDispatchCommentMentions(
+            Post post,
+            PostComment comment,
+            UUID actorId,
+            Set<UUID> mentionedUserIds) {
+        if (post == null || comment == null || mentionedUserIds == null || mentionedUserIds.isEmpty()) {
+            return;
+        }
+        List<UUID> recipients = mentionedUserIds.stream()
+                .filter(userId -> userId != null && !userId.equals(actorId))
+                .distinct()
+                .toList();
+        if (recipients.isEmpty()) {
+            return;
+        }
+        safeDispatchSocial(NotificationType.COMMENT_MENTION,
+                NotificationTargetType.COMMENT,
+                actorId,
+                recipients,
+                post.getId(),
+                comment.getId(),
+                "comment:" + comment.getId() + ":mention",
+                Map.of(
+                        "postId", post.getId().toString(),
+                        "commentId", comment.getId().toString(),
+                        "commentPreview", buildCommentPreview(comment.getContent())
+                ),
+                true);
+    }
+
+    private void safeDispatchSocial(
+            NotificationType type,
+            NotificationTargetType targetType,
+            UUID actorId,
+            List<UUID> recipients,
+            UUID postId,
+            UUID commentId,
+            String dedupKeyPrefix,
+            Map<String, Object> metadata,
+            boolean recipientDirectlyAffected) {
+        if (notificationDispatcher == null || recipients == null || recipients.isEmpty()) {
+            return;
+        }
+        try {
+            Map<String, Object> payload = new java.util.LinkedHashMap<>();
+            if (metadata != null) {
+                payload.putAll(metadata);
+            }
+            payload.put("actorName", displayName(actorId));
+            notificationDispatcher.dispatch(NotificationDispatchRequest.builder()
+                    .type(type)
+                    .targetType(targetType)
+                    .targetId(commentId != null ? commentId : postId)
+                    .actorId(actorId)
+                    .explicitRecipientIds(recipients)
+                    .postId(postId)
+                    .commentId(commentId)
+                    .metadata(payload)
+                    .dedupKeyPrefix(dedupKeyPrefix)
+                    .directMention(type == NotificationType.COMMENT_MENTION)
+                    .replyToRecipientMessage(type == NotificationType.COMMENT_REPLY)
+                    .recipientDirectlyAffected(recipientDirectlyAffected)
+                    .build());
+        } catch (Exception ex) {
+            log.warn("[SocialService] Notification dispatch failed type={} actor={} target={} comment={}: {}",
+                    type,
+                    actorId,
+                    postId,
+                    commentId,
+                    ex.getMessage());
+        }
+    }
+
     @Transactional(readOnly = true)
     public PostAudienceResponse getPostAudience(UUID postId) {
         Post post = getOwnedPost(postId);
@@ -860,6 +1101,83 @@ public class SocialService {
 
     private UserProfile currentUser() {
         return userService.getMyProfile();
+    }
+
+    private Set<UUID> resolveMentionedUserIds(String content, Post post, UUID actorId) {
+        if (content == null || content.isBlank() || post == null) {
+            return Set.of();
+        }
+        Set<String> mentionedUsernames = new HashSet<>();
+        Matcher matcher = MENTION_PATTERN.matcher(content);
+        while (matcher.find()) {
+            String username = matcher.group(1);
+            if (username != null && !username.isBlank()) {
+                mentionedUsernames.add(username.toLowerCase());
+            }
+        }
+        if (mentionedUsernames.isEmpty()) {
+            return Set.of();
+        }
+
+        Set<UUID> candidateIds = new LinkedHashSet<>(getFriendIds(actorId));
+        candidateIds.add(post.getUserId());
+        candidateIds.addAll(postTagRepository.findByPostId(post.getId()).stream()
+                .map(PostTag::getTaggedUserId)
+                .toList());
+
+        Set<UUID> recipients = new LinkedHashSet<>();
+        for (UUID candidateId : candidateIds) {
+            if (candidateId == null || candidateId.equals(actorId) || !canViewPost(post, candidateId)) {
+                continue;
+            }
+            try {
+                UserProfile profile = userService.getUser(candidateId);
+                String username = profile.getUsername();
+                if (username != null && mentionedUsernames.contains(username.toLowerCase())) {
+                    recipients.add(candidateId);
+                }
+            } catch (Exception ignored) {
+                // Ignore stale candidate ids.
+            }
+        }
+        return recipients;
+    }
+
+    private Set<UUID> union(Set<UUID> base, UUID extra) {
+        Set<UUID> result = new LinkedHashSet<>();
+        if (base != null) {
+            result.addAll(base);
+        }
+        if (extra != null) {
+            result.add(extra);
+        }
+        return result;
+    }
+
+    private String displayName(UUID userId) {
+        if (userId == null) {
+            return "Ai đó";
+        }
+        try {
+            UserProfile profile = userService.getUser(userId);
+            if (profile.getDisplayName() != null && !profile.getDisplayName().isBlank()) {
+                return profile.getDisplayName();
+            }
+            if (profile.getUsername() != null && !profile.getUsername().isBlank()) {
+                return profile.getUsername();
+            }
+        } catch (Exception ignored) {
+            // Fallback below.
+        }
+        return "Ai đó";
+    }
+
+    private String buildCommentPreview(String content) {
+        if (content == null || content.isBlank()) {
+            return "Đã gửi một bình luận";
+        }
+        String trimmed = content.trim();
+        return trimmed.length() <= 100 ? trimmed : trimmed.substring(0, 97) + "...";
     }
 
     private boolean canViewPost(Post post, UUID viewerUserId) {
@@ -960,6 +1278,47 @@ public class SocialService {
         return trimmed.isEmpty() ? null : trimmed;
     }
 
+    private MomentAudioSelection resolveAndValidateMomentAudio(CreateMomentRequest request) {
+        MomentAudioMode mode = request.getAudioMode() == null ? defaultAudioModeFor(request.getMediaType()) : request.getAudioMode();
+        int startSeconds = request.getMusicStartSeconds() == null ? 0 : Math.max(request.getMusicStartSeconds(), 0);
+        String musicUrl = trimToNull(request.getMusicUrl());
+        String musicTrackId = trimToNull(request.getMusicTrackId());
+        String musicTitle = trimToNull(request.getMusicTitle());
+        String musicArtist = trimToNull(request.getMusicArtist());
+
+        if (request.getMediaType() == MediaType.IMAGE) {
+            if (mode == MomentAudioMode.ORIGINAL || mode == MomentAudioMode.MUTED) {
+                throw new BusinessException("Image story only supports NONE or REPLACED audio mode");
+            }
+            if (mode == MomentAudioMode.REPLACED && musicUrl == null) {
+                throw new BusinessException("musicUrl is required when replacing audio");
+            }
+        }
+
+        if (request.getMediaType() == MediaType.VIDEO) {
+            if (mode == MomentAudioMode.NONE) {
+                throw new BusinessException("Video story does not support NONE audio mode");
+            }
+            if (mode == MomentAudioMode.REPLACED && musicUrl == null) {
+                throw new BusinessException("musicUrl is required when replacing audio");
+            }
+        }
+
+        if (mode != MomentAudioMode.REPLACED) {
+            musicUrl = null;
+            musicTrackId = null;
+            musicTitle = null;
+            musicArtist = null;
+            startSeconds = 0;
+        }
+
+        return new MomentAudioSelection(mode, musicTrackId, musicTitle, musicArtist, musicUrl, startSeconds);
+    }
+
+    private MomentAudioMode defaultAudioModeFor(MediaType mediaType) {
+        return mediaType == MediaType.VIDEO ? MomentAudioMode.ORIGINAL : MomentAudioMode.NONE;
+    }
+
     private MediaType toMediaType(MessageType messageType) {
         if (messageType == MessageType.IMAGE) {
             return MediaType.IMAGE;
@@ -995,6 +1354,16 @@ public class SocialService {
         long shares = moment.getShareCount() == null ? 0L : moment.getShareCount();
         long ageHours = Math.max(1L, (Instant.now().toEpochMilli() - moment.getCreatedAt().toEpochMilli()) / (1000L * 60L * 60L));
         return (likes * 3.0) + (comments * 4.0) + (views * 1.0) + (shares * 5.0) + (48.0 / ageHours);
+    }
+
+    private record MomentAudioSelection(
+            MomentAudioMode audioMode,
+            String musicTrackId,
+            String musicTitle,
+            String musicArtist,
+            String musicUrl,
+            Integer musicStartSeconds
+    ) {
     }
 
     private record CursorData(Instant createdAt, UUID momentId) {

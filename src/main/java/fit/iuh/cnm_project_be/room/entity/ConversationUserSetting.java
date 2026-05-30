@@ -2,6 +2,7 @@ package fit.iuh.cnm_project_be.room.entity;
 
 import fit.iuh.cnm_project_be.room.enums.ConversationNotificationLevel;
 import fit.iuh.cnm_project_be.room.enums.ConversationBackgroundType;
+import fit.iuh.cnm_project_be.room.enums.GroupConversationLabel;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.EnumType;
@@ -41,6 +42,12 @@ public class ConversationUserSetting {
     @Column(name = "muted_at")
     private Instant mutedAt;
 
+    @Column(name = "muted_until")
+    private Instant mutedUntil;
+
+    @Column(name = "last_muted_at")
+    private Instant lastMutedAt;
+
     @Column(name = "archived_at")
     private Instant archivedAt;
 
@@ -63,6 +70,10 @@ public class ConversationUserSetting {
 
     @Column(name = "background_image_url")
     private String backgroundImageUrl;
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "group_label")
+    private GroupConversationLabel groupLabel;
 
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;

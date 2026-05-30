@@ -17,6 +17,8 @@ public interface UserProfileRepository
     Optional<UserProfile> findByUsernameAndDeletedAtIsNull(String username);
 
     Optional<UserProfile> findByInviteLinkAndDeletedAtIsNull(String inviteLink);
+
+    List<UserProfile> findByUserIdInAndDeletedAtIsNull(List<UUID> userIds);
 //    @Query("""
 //    select u from UserProfile u
 //    where u.deletedAt is null
@@ -47,4 +49,27 @@ public interface UserProfileRepository
     List<UserProfile> searchUsers(@Param("currentUserId") UUID currentUserId,
                                   @Param("keyword") String keyword,
                                   Pageable pageable);
+
+    long countByDeletedAtIsNull();
+
+    long countByDeletedAtIsNullAndBannedUntilAfter(java.time.Instant now);
+
+    @Query("""
+        select u from UserProfile u
+        where u.deletedAt is null
+          and (:keyword is null
+               or lower(coalesce(u.username, '')) like lower(concat('%', :keyword, '%'))
+               or lower(coalesce(u.displayName, '')) like lower(concat('%', :keyword, '%'))
+               or lower(coalesce(u.firstName, '')) like lower(concat('%', :keyword, '%'))
+               or lower(coalesce(u.lastName, '')) like lower(concat('%', :keyword, '%'))
+               or lower(coalesce(u.email, '')) like lower(concat('%', :keyword, '%'))
+               or lower(coalesce(u.phone, '')) like lower(concat('%', :keyword, '%')))
+          and (:bannedOnly = false or (u.bannedUntil is not null and u.bannedUntil > :now))
+        order by u.createdAt desc
+    """)
+    List<UserProfile> findForAdmin(
+            @Param("keyword") String keyword,
+            @Param("bannedOnly") boolean bannedOnly,
+            @Param("now") java.time.Instant now,
+            Pageable pageable);
 }
