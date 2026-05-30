@@ -460,7 +460,7 @@ public class ConversationService {
     }
 
     @Transactional
-    public void updateBackground(
+    public ConversationResponse updateBackground(
             UUID conversationId,
             UUID actorUserId,
             ConversationBackgroundType backgroundType,
@@ -476,7 +476,7 @@ public class ConversationService {
         if (Objects.equals(resolveConversationBackgroundType(conversation), normalizedType)
                 && Objects.equals(conversation.getBackgroundColor(), normalizedColor)
                 && Objects.equals(conversation.getBackgroundImageUrl(), normalizedImageUrl)) {
-            return;
+            return mapToResponse(conversation, actorUserId);
         }
 
         conversation.setBackgroundType(normalizedType == ConversationBackgroundType.DEFAULT ? null : normalizedType);
@@ -491,9 +491,12 @@ public class ConversationService {
         if (normalizedImageUrl != null) {
             metadata.put("backgroundImageUrl", normalizedImageUrl);
         }
-        createAndBroadcastGroupSystemMessage(savedConversation, actorUserId, "group_background_changed", null,
-                metadata);
+        if (savedConversation.getType() == ConversationType.GROUP) {
+            createAndBroadcastGroupSystemMessage(savedConversation, actorUserId, "group_background_changed", null,
+                    metadata);
+        }
         broadcastConversationUpdates(savedConversation.getId());
+        return mapToResponse(savedConversation, actorUserId);
     }
 
     @Transactional

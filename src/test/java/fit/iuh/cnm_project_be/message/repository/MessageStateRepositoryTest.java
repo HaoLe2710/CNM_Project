@@ -43,6 +43,7 @@ class MessageStateRepositoryTest {
                     conversation_id uuid not null,
                     sender_id uuid not null,
                     content text,
+                    original_link_url text,
                     message_type varchar(20) not null,
                     reply_to bigint,
                     reply_to_sender_id uuid,
@@ -51,7 +52,8 @@ class MessageStateRepositoryTest {
                     created_at timestamp with time zone not null,
                     updated_at timestamp with time zone,
                     deleted_at timestamp with time zone,
-                    edited_at timestamp with time zone
+                    edited_at timestamp with time zone,
+                    pinned_at timestamp with time zone
                 )
                 """);
         jdbcTemplate.execute("""

@@ -18,6 +18,7 @@ import fit.iuh.cnm_project_be.message_processing.enums.MessageProcessingJobType;
 import fit.iuh.cnm_project_be.message_processing.enums.MessageProcessingJobScope;
 import fit.iuh.cnm_project_be.message_processing.enums.MessageProcessingStatus;
 import fit.iuh.cnm_project_be.message_processing.provider.SpeechToTextProvider;
+import fit.iuh.cnm_project_be.message_processing.provider.SpeechToTextProviderException;
 import fit.iuh.cnm_project_be.message_processing.provider.SpeechToTextRequest;
 import fit.iuh.cnm_project_be.message_processing.provider.SpeechToTextResult;
 import fit.iuh.cnm_project_be.message_processing.provider.TextToSpeechProvider;
@@ -31,6 +32,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.domain.PageRequest;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
@@ -47,6 +49,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.TimeUnit;
 
 @Service
 @RequiredArgsConstructor
@@ -57,6 +60,7 @@ public class MessageProcessingService {
     private static final String DEFAULT_LANGUAGE = "vi";
     private static final String TTS_PATH_PREFIX = "tts";
     private static final String DICTATION_PATH_PREFIX = "dictation";
+    private static final String DICTATION_RATE_LIMIT_PREFIX = "message-processing:dictation:rate:";
     private static final long MAX_STT_DURATION_MS = 300_000L;
 
     private final MessageProcessingJobRepository messageProcessingJobRepository;
@@ -67,6 +71,7 @@ public class MessageProcessingService {
     private final SpeechToTextProvider speechToTextProvider;
     private final TextToSpeechProvider textToSpeechProvider;
     private final MessageProcessingRealtimePublisher realtimePublisher;
+    private final StringRedisTemplate stringRedisTemplate;
 
     @Value("${app.message-processing.max-batch-size:10}")
     private int maxBatchSize;
@@ -85,6 +90,24 @@ public class MessageProcessingService {
 
     @Value("${app.message-processing.dictation.max-file-size-bytes:10485760}")
     private long maxDictationFileSizeBytes;
+
+    @Value("${app.message-processing.dictation.cleanup-enabled:true}")
+    private boolean dictationCleanupEnabled;
+
+    @Value("${app.message-processing.dictation.retention-hours:24}")
+    private long dictationRetentionHours;
+
+    @Value("${app.message-processing.dictation.cleanup-batch-size:50}")
+    private int dictationCleanupBatchSize;
+
+    @Value("${app.message-processing.dictation.cleanup-retry-delay-minutes:30}")
+    private long dictationCleanupRetryDelayMinutes;
+
+    @Value("${app.message-processing.dictation.rate-window-seconds:300}")
+    private long dictationRateWindowSeconds;
+
+    @Value("${app.message-processing.dictation.rate-max-jobs:20}")
+    private int dictationRateMaxJobs;
 
     private final HttpClient directHttpClient = HttpClient.newBuilder()
             .connectTimeout(Duration.ofSeconds(20))
@@ -215,6 +238,8 @@ public class MessageProcessingService {
             throw new BusinessException("Dictation duration exceeds the supported limit");
         }
 
+        enforceDictationRateLimit(actorId);
+
         String language = normalizeNullableText(request.getLanguage());
         if (language == null) {
             language = DEFAULT_LANGUAGE;
@@ -330,6 +355,38 @@ public class MessageProcessingService {
     }
 
     @Transactional
+    public int processDueDictationInputCleanup(Instant now) {
+        if (!dictationCleanupEnabled) {
+            return 0;
+        }
+
+        Instant executionTime = now != null ? now : Instant.now();
+        int batchSize = Math.max(dictationCleanupBatchSize, 1);
+        List<MessageProcessingJob> dueJobs = messageProcessingJobRepository.findDueDictationCleanupJobs(
+                MessageProcessingJobScope.DICTATION,
+                executionTime,
+                PageRequest.of(0, batchSize));
+
+        if (dueJobs.isEmpty()) {
+            return 0;
+        }
+
+        int cleanedCount = 0;
+        for (MessageProcessingJob job : dueJobs) {
+            try {
+                if (cleanupDictationInput(job, executionTime)) {
+                    cleanedCount++;
+                }
+            } catch (Exception ex) {
+                log.warn("[MessageProcessingCleanup] Failed to cleanup dictation input. jobId={} reason={}",
+                        job.getId(),
+                        ex.getMessage());
+            }
+        }
+        return cleanedCount;
+    }
+
+    @Transactional
     protected boolean processSingleJob(UUID jobId, Instant startedAt) {
         Instant startedTimestamp = startedAt != null ? startedAt : Instant.now();
         int claimed = messageProcessingJobRepository.claimForProcessing(
@@ -355,18 +412,25 @@ public class MessageProcessingService {
             job.setErrorMessage(null);
             job.setCompletedAt(Instant.now());
             job.setNextAttemptAt(null);
+            if (resolveJobScope(job) == MessageProcessingJobScope.DICTATION) {
+                scheduleDictationInputCleanup(job, job.getCompletedAt());
+            }
             messageProcessingJobRepository.save(job);
             realtimePublisher.publish(job.getRequestedBy(), job);
             return true;
         } catch (Exception ex) {
             Instant failureTime = Instant.now();
+            boolean retryable = isRetryableProcessingError(ex);
             int failedCount = (job.getRetryCount() != null ? job.getRetryCount() : 0) + 1;
             job.setRetryCount(failedCount);
             job.setErrorMessage(resolveErrorMessage(ex));
             job.setCompletedAt(failureTime);
-            if (failedCount >= Math.max(maxRetry, 1)) {
+            if (!retryable || failedCount >= Math.max(maxRetry, 1)) {
                 job.setStatus(MessageProcessingStatus.FAILED);
                 job.setNextAttemptAt(null);
+                if (resolveJobScope(job) == MessageProcessingJobScope.DICTATION) {
+                    scheduleDictationInputCleanup(job, failureTime);
+                }
                 messageProcessingJobRepository.save(job);
                 realtimePublisher.publish(job.getRequestedBy(), job);
                 return true;
@@ -511,6 +575,38 @@ public class MessageProcessingService {
         job.setResultMimeType(mimeType);
     }
 
+    private boolean cleanupDictationInput(MessageProcessingJob job, Instant now) {
+        if (job == null || resolveJobScope(job) != MessageProcessingJobScope.DICTATION) {
+            return false;
+        }
+        if (job.getInputCleanedAt() != null) {
+            return false;
+        }
+
+        String storageKey = normalizeNullableText(job.getInputStorageKey());
+        Instant cleanupTime = now != null ? now : Instant.now();
+        if (storageKey == null) {
+            job.setInputCleanedAt(cleanupTime);
+            job.setInputCleanupError(null);
+            messageProcessingJobRepository.save(job);
+            return true;
+        }
+
+        try {
+            s3MediaStorageService.deleteByStorageKey(storageKey);
+            job.setInputCleanedAt(cleanupTime);
+            job.setInputCleanupError(null);
+            messageProcessingJobRepository.save(job);
+            return true;
+        } catch (Exception ex) {
+            job.setInputCleanupError(resolveErrorMessage(ex));
+            long retryDelayMinutes = Math.max(dictationCleanupRetryDelayMinutes, 1L);
+            job.setInputCleanupAt(cleanupTime.plus(Duration.ofMinutes(retryDelayMinutes)));
+            messageProcessingJobRepository.save(job);
+            return false;
+        }
+    }
+
     private MessageAttachment resolveAudioAttachment(Message message, Long attachmentId) {
         List<MessageAttachment> attachments = messageAttachmentRepository.findByMessageId(message.getId());
         if (attachments == null || attachments.isEmpty()) {
@@ -551,6 +647,20 @@ public class MessageProcessingService {
             return MessageProcessingJobScope.MESSAGE;
         }
         return job.getJobScope();
+    }
+
+    private void scheduleDictationInputCleanup(MessageProcessingJob job, Instant baseTime) {
+        if (job == null || resolveJobScope(job) != MessageProcessingJobScope.DICTATION) {
+            return;
+        }
+        if (normalizeNullableText(job.getInputStorageKey()) == null) {
+            return;
+        }
+        Instant anchor = baseTime != null ? baseTime : Instant.now();
+        long retentionHours = Math.max(dictationRetentionHours, 0L);
+        job.setInputCleanupAt(anchor.plus(Duration.ofHours(retentionHours)));
+        job.setInputCleanedAt(null);
+        job.setInputCleanupError(null);
     }
 
     private void assertActorCanAccessJob(UUID actorId, MessageProcessingJob job) {
@@ -642,7 +752,73 @@ public class MessageProcessingService {
         if (ex == null || ex.getMessage() == null || ex.getMessage().isBlank()) {
             return "Unknown processing error";
         }
-        return ex.getMessage().trim();
+        String sanitized = ex.getMessage().replaceAll("(?i)bearer\\s+[a-z0-9._-]+", "Bearer ***").trim();
+        if (sanitized.length() > 500) {
+            return sanitized.substring(0, 500) + "...";
+        }
+        return sanitized;
+    }
+
+    private boolean isRetryableProcessingError(Exception ex) {
+        if (ex instanceof SpeechToTextProviderException providerException) {
+            return providerException.isRetryable();
+        }
+
+        if (ex instanceof BusinessException) {
+            String message = normalizeNullableText(ex.getMessage());
+            if (message == null) {
+                return false;
+            }
+            String normalized = message.toLowerCase(Locale.ROOT);
+            if (normalized.contains("timeout")
+                    || normalized.contains("timed out")
+                    || normalized.contains("network")
+                    || normalized.contains("429")
+                    || normalized.contains("rate limit")
+                    || normalized.contains("too many")) {
+                return true;
+            }
+            if (normalized.contains("not found")
+                    || normalized.contains("unsupported")
+                    || normalized.contains("exceeds")
+                    || normalized.contains("forbidden")
+                    || normalized.contains("not configured")
+                    || normalized.contains("invalid")
+                    || normalized.contains("missing")
+                    || normalized.contains("does not belong")
+                    || normalized.contains("định dạng")
+                    || normalized.contains("không hỗ trợ")
+                    || normalized.contains("vượt quá")) {
+                return false;
+            }
+            return false;
+        }
+
+        return true;
+    }
+
+    private void enforceDictationRateLimit(UUID actorId) {
+        int maxJobs = Math.max(dictationRateMaxJobs, 1);
+        long windowSeconds = Math.max(dictationRateWindowSeconds, 1L);
+        String rateKey = DICTATION_RATE_LIMIT_PREFIX + actorId;
+        try {
+            Long current = stringRedisTemplate.opsForValue().increment(rateKey);
+            if (current == null) {
+                return;
+            }
+            if (current == 1L) {
+                stringRedisTemplate.expire(rateKey, windowSeconds, TimeUnit.SECONDS);
+            }
+            if (current > maxJobs) {
+                throw new BusinessException("Bạn đã gửi quá nhiều yêu cầu chuyển giọng nói. Vui lòng thử lại sau.");
+            }
+        } catch (BusinessException ex) {
+            throw ex;
+        } catch (Exception ex) {
+            log.warn("[MessageProcessing] Dictation rate guard degraded, fallback fail-open. userId={} reason={}",
+                    actorId,
+                    ex.getMessage());
+        }
     }
 
     private long resolveRetryDelayMs(int failedCount) {

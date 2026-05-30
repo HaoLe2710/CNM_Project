@@ -2,12 +2,14 @@ package fit.iuh.cnm_project_be.message.service;
 
 import fit.iuh.cnm_project_be.message.dto.MessageReactionRequest;
 import fit.iuh.cnm_project_be.message.dto.MessageAttachmentPayload;
+import fit.iuh.cnm_project_be.message.dto.MessageMentionPayload;
 import fit.iuh.cnm_project_be.message.dto.SendMessageRequest;
 import fit.iuh.cnm_project_be.message.entity.Message;
 import fit.iuh.cnm_project_be.message.entity.MessageReaction;
 import fit.iuh.cnm_project_be.message.enums.MessageReactionType;
 import fit.iuh.cnm_project_be.message.enums.MessageType;
 import fit.iuh.cnm_project_be.message.repository.MessageAttachmentRepository;
+import fit.iuh.cnm_project_be.message.repository.ConversationMemberReadStateRepository;
 import fit.iuh.cnm_project_be.message.repository.MessageReactionRepository;
 import fit.iuh.cnm_project_be.message.repository.MessageRepository;
 import fit.iuh.cnm_project_be.message.repository.MessageStatusRepository;
@@ -60,6 +62,8 @@ class MessageNotificationIntegrationTest {
     @Mock
     private MessageReactionRepository messageReactionRepository;
     @Mock
+    private ConversationMemberReadStateRepository conversationMemberReadStateRepository;
+    @Mock
     private MessageStatusRepository messageStatusRepository;
     @Mock
     private MessageUserStateRepository messageUserStateRepository;
@@ -86,6 +90,7 @@ class MessageNotificationIntegrationTest {
                 messageRepository,
                 messageAttachmentRepository,
                 messageReactionRepository,
+                conversationMemberReadStateRepository,
                 messageStatusRepository,
                 messageUserStateRepository,
                 conversationRepository,
@@ -166,6 +171,36 @@ class MessageNotificationIntegrationTest {
             assertThat(request.getType()).isEqualTo(NotificationType.REPLY_TO_MY_MESSAGE);
             assertThat(request.getExplicitRecipientIds()).containsExactly(originalAuthorId);
             assertThat(request.isReplyToRecipientMessage()).isTrue();
+        });
+    }
+
+    @Test
+    void groupMentionFromExplicitPayloadDispatchesMentionNotification() {
+        UUID conversationId = UUID.randomUUID();
+        UUID senderId = UUID.randomUUID();
+        UUID mentionedId = UUID.randomUUID();
+        UUID normalRecipientId = UUID.randomUUID();
+        mockConversation(conversationId, senderId, ConversationType.GROUP, List.of(senderId, mentionedId, normalRecipientId));
+
+        MessageMentionPayload mentionPayload = new MessageMentionPayload();
+        mentionPayload.setUserId(mentionedId);
+        mentionPayload.setDisplayName("Mentioned");
+
+        SendMessageRequest request = sendRequest(conversationId, "hello @display-name", null);
+        request.setMentions(List.of(mentionPayload));
+
+        messageService.sendMessage(senderId, request);
+
+        ArgumentCaptor<NotificationDispatchRequest> captor = ArgumentCaptor.forClass(NotificationDispatchRequest.class);
+        verify(notificationDispatcher, atLeastOnce()).dispatch(captor.capture());
+        List<NotificationDispatchRequest> requests = captor.getAllValues();
+        assertThat(requests).anySatisfy(dispatchRequest -> {
+            assertThat(dispatchRequest.getType()).isEqualTo(NotificationType.GROUP_MENTION);
+            assertThat(dispatchRequest.getExplicitRecipientIds()).containsExactly(mentionedId);
+        });
+        assertThat(requests).anySatisfy(dispatchRequest -> {
+            assertThat(dispatchRequest.getType()).isEqualTo(NotificationType.NEW_GROUP_MESSAGE);
+            assertThat(dispatchRequest.getExplicitRecipientIds()).containsExactly(normalRecipientId);
         });
     }
 

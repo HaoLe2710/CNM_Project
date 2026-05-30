@@ -100,6 +100,15 @@ public class MessageProcessingJob {
     @Column(name = "next_attempt_at")
     private Instant nextAttemptAt;
 
+    @Column(name = "input_cleanup_at")
+    private Instant inputCleanupAt;
+
+    @Column(name = "input_cleaned_at")
+    private Instant inputCleanedAt;
+
+    @Column(name = "input_cleanup_error")
+    private String inputCleanupError;
+
     @PrePersist
     void prePersist() {
         Instant now = Instant.now();

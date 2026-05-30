@@ -15,7 +15,7 @@ import java.util.UUID;
 public final class OpenAiProviderSupport {
 
     private static final Set<String> SUPPORTED_STT_EXTENSIONS = Set.of(
-            "mp3", "mp4", "mpeg", "mpga", "m4a", "wav", "webm", "ogg");
+            "mp3", "mp4", "mpeg", "mpga", "m4a", "wav", "webm", "ogg", "flac");
 
     private OpenAiProviderSupport() {
     }
@@ -50,38 +50,18 @@ public final class OpenAiProviderSupport {
 
     public static String sanitizeAudioExtension(String fileName, String audioFormat, String mimeType) {
         String byName = extensionFromFileName(fileName);
-        if (isSupportedAudioExtension(byName)) {
-            return byName;
+        if (byName != null) {
+            return normalizeAudioAlias(byName);
         }
 
         String byFormat = normalizeToken(audioFormat);
-        if ("m4a".equals(byFormat)) {
-            return "m4a";
-        }
-        if ("mp3".equals(byFormat) || "mpeg".equals(byFormat) || "mpga".equals(byFormat)) {
-            return "mp3";
-        }
-        if ("wav".equals(byFormat) || "webm".equals(byFormat) || "ogg".equals(byFormat) || "mp4".equals(byFormat)) {
-            return byFormat;
+        if (byFormat != null) {
+            return normalizeAudioAlias(byFormat);
         }
 
-        String normalizedMime = normalizeToken(mimeType);
-        if (normalizedMime != null) {
-            if (normalizedMime.contains("mpeg") || normalizedMime.contains("mp3")) {
-                return "mp3";
-            }
-            if (normalizedMime.contains("wav")) {
-                return "wav";
-            }
-            if (normalizedMime.contains("webm")) {
-                return "webm";
-            }
-            if (normalizedMime.contains("ogg")) {
-                return "ogg";
-            }
-            if (normalizedMime.contains("mp4") || normalizedMime.contains("m4a")) {
-                return "m4a";
-            }
+        String byMime = extensionFromMimeType(mimeType);
+        if (byMime != null) {
+            return normalizeAudioAlias(byMime);
         }
 
         return "mp3";
@@ -90,7 +70,7 @@ public final class OpenAiProviderSupport {
     public static void validateSttAudioFormat(String fileName, String audioFormat, String mimeType) {
         String extension = sanitizeAudioExtension(fileName, audioFormat, mimeType);
         if (!isSupportedAudioExtension(extension)) {
-            throw new BusinessException("Unsupported audio format for speech-to-text");
+            throw new BusinessException("Định dạng âm thanh chưa được hỗ trợ.");
         }
     }
 
@@ -165,6 +145,59 @@ public final class OpenAiProviderSupport {
     private static boolean isSupportedAudioExtension(String extension) {
         String normalized = normalizeToken(extension);
         return normalized != null && SUPPORTED_STT_EXTENSIONS.contains(normalized);
+    }
+
+    private static String normalizeAudioAlias(String extension) {
+        String normalized = normalizeToken(extension);
+        if (normalized == null) {
+            return null;
+        }
+        if ("mpeg".equals(normalized) || "mpga".equals(normalized)) {
+            return "mp3";
+        }
+        if ("x-wav".equals(normalized)) {
+            return "wav";
+        }
+        if ("x-flac".equals(normalized)) {
+            return "flac";
+        }
+        return normalized;
+    }
+
+    private static String extensionFromMimeType(String mimeType) {
+        String normalized = normalizeToken(mimeType);
+        if (normalized == null) {
+            return null;
+        }
+        int semicolonIndex = normalized.indexOf(';');
+        String contentType = semicolonIndex >= 0 ? normalized.substring(0, semicolonIndex).trim() : normalized;
+        if (contentType.isBlank()) {
+            return null;
+        }
+
+        if ("audio/mpeg".equals(contentType) || "audio/mp3".equals(contentType)) {
+            return "mp3";
+        }
+        if ("audio/mp4".equals(contentType) || "audio/m4a".equals(contentType) || "audio/x-m4a".equals(contentType)) {
+            return "m4a";
+        }
+        if ("audio/wav".equals(contentType) || "audio/x-wav".equals(contentType)) {
+            return "wav";
+        }
+        if ("audio/ogg".equals(contentType) || "audio/opus".equals(contentType)) {
+            return "ogg";
+        }
+        if ("audio/webm".equals(contentType)) {
+            return "webm";
+        }
+        if ("audio/flac".equals(contentType) || "audio/x-flac".equals(contentType)) {
+            return "flac";
+        }
+
+        if (contentType.startsWith("audio/")) {
+            return contentType.substring("audio/".length());
+        }
+        return null;
     }
 
     private static String normalizeToken(String value) {

@@ -30,6 +30,8 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.mockito.junit.jupiter.MockitoSettings;
 import org.mockito.quality.Strictness;
 import org.springframework.data.domain.PageRequest;
+import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.data.redis.core.ValueOperations;
 import org.springframework.mock.web.MockMultipartFile;
 import org.springframework.test.util.ReflectionTestUtils;
 
@@ -42,6 +44,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -65,6 +69,10 @@ class MessageProcessingServiceTest {
     private TextToSpeechProvider textToSpeechProvider;
     @Mock
     private MessageProcessingRealtimePublisher realtimePublisher;
+    @Mock
+    private StringRedisTemplate stringRedisTemplate;
+    @Mock
+    private ValueOperations<String, String> valueOperations;
 
     @InjectMocks
     private MessageProcessingService messageProcessingService;
@@ -84,6 +92,13 @@ class MessageProcessingServiceTest {
         ReflectionTestUtils.setField(messageProcessingService, "retryMaxDelayMs", 10_000L);
         ReflectionTestUtils.setField(messageProcessingService, "maxDictationDurationMs", 90_000L);
         ReflectionTestUtils.setField(messageProcessingService, "maxDictationFileSizeBytes", 10_485_760L);
+        ReflectionTestUtils.setField(messageProcessingService, "dictationCleanupEnabled", true);
+        ReflectionTestUtils.setField(messageProcessingService, "dictationRetentionHours", 24L);
+        ReflectionTestUtils.setField(messageProcessingService, "dictationCleanupBatchSize", 50);
+        ReflectionTestUtils.setField(messageProcessingService, "dictationCleanupRetryDelayMinutes", 30L);
+        ReflectionTestUtils.setField(messageProcessingService, "dictationRateWindowSeconds", 300L);
+        ReflectionTestUtils.setField(messageProcessingService, "dictationRateMaxJobs", 20);
+        when(stringRedisTemplate.opsForValue()).thenReturn(valueOperations);
     }
 
     @Test
@@ -390,6 +405,109 @@ class MessageProcessingServiceTest {
                 .isInstanceOf(ForbiddenException.class);
     }
 
+    @Test
+    void requestDictationSpeechToTextRateLimitedRejected() {
+        MockMultipartFile audio = new MockMultipartFile(
+                "audio",
+                "dictation.webm",
+                "audio/webm",
+                new byte[] {1, 2, 3, 4});
+        fit.iuh.cnm_project_be.message_processing.dto.request.CreateDictationSpeechToTextRequest request =
+                new fit.iuh.cnm_project_be.message_processing.dto.request.CreateDictationSpeechToTextRequest();
+        request.setConversationId(conversationId);
+        request.setAudioFormat("webm");
+
+        when(conversationMemberRepository.existsByConversationIdAndUserId(conversationId, actorId)).thenReturn(true);
+        when(valueOperations.increment(any(String.class))).thenReturn(21L);
+
+        assertThatThrownBy(() -> messageProcessingService.requestDictationSpeechToText(actorId, audio, request))
+                .isInstanceOf(BusinessException.class)
+                .hasMessageContaining("quá nhiều");
+        verify(s3MediaStorageService, never()).upload(
+                any(UUID.class),
+                any(org.springframework.web.multipart.MultipartFile.class),
+                any(String.class));
+    }
+
+    @Test
+    void processDictationSttSuccessSchedulesCleanup() {
+        UUID jobId = UUID.randomUUID();
+        MessageProcessingJob job = buildPendingDictationJob(jobId, conversationId, "dictation/2026/05/file.webm");
+
+        when(messageProcessingJobRepository.findRunnableByStatusOrderByCreatedAtAsc(
+                eq(MessageProcessingStatus.PENDING),
+                any(Instant.class),
+                eq(PageRequest.of(0, 10)))).thenReturn(List.of(job));
+        when(messageProcessingJobRepository.claimForProcessing(
+                eq(jobId),
+                eq(MessageProcessingStatus.PENDING),
+                eq(MessageProcessingStatus.PROCESSING),
+                any(Instant.class))).thenReturn(1);
+        when(messageProcessingJobRepository.findById(jobId)).thenReturn(Optional.of(job));
+        when(s3MediaStorageService.downloadByStorageKey("dictation/2026/05/file.webm"))
+                .thenReturn(new byte[] {9, 8, 7});
+        when(speechToTextProvider.transcribe(any())).thenReturn(SpeechToTextResult.builder()
+                .transcript("hello dictation")
+                .language("vi")
+                .build());
+        when(messageProcessingJobRepository.save(any(MessageProcessingJob.class)))
+                .thenAnswer(invocation -> invocation.getArgument(0));
+
+        int processed = messageProcessingService.processPendingJobs(Instant.now());
+
+        assertThat(processed).isEqualTo(1);
+        assertThat(job.getStatus()).isEqualTo(MessageProcessingStatus.COMPLETED);
+        assertThat(job.getInputCleanupAt()).isNotNull();
+        assertThat(job.getInputCleanedAt()).isNull();
+    }
+
+    @Test
+    void processDueDictationInputCleanupDeletesStorageAndMarksCleaned() {
+        MessageProcessingJob job = buildPendingDictationJob(UUID.randomUUID(), conversationId, "dictation/cleanup.webm");
+        job.setInputCleanupAt(Instant.now().minusSeconds(120));
+        job.setInputCleanedAt(null);
+        job.setStatus(MessageProcessingStatus.COMPLETED);
+
+        when(messageProcessingJobRepository.findDueDictationCleanupJobs(
+                eq(fit.iuh.cnm_project_be.message_processing.enums.MessageProcessingJobScope.DICTATION),
+                any(Instant.class),
+                eq(PageRequest.of(0, 50)))).thenReturn(List.of(job));
+        when(messageProcessingJobRepository.save(any(MessageProcessingJob.class)))
+                .thenAnswer(invocation -> invocation.getArgument(0));
+
+        int cleaned = messageProcessingService.processDueDictationInputCleanup(Instant.now());
+
+        assertThat(cleaned).isEqualTo(1);
+        assertThat(job.getInputCleanedAt()).isNotNull();
+        assertThat(job.getInputCleanupError()).isNull();
+        verify(s3MediaStorageService).deleteByStorageKey("dictation/cleanup.webm");
+    }
+
+    @Test
+    void processDueDictationInputCleanupFailureRecordsErrorAndReschedules() {
+        MessageProcessingJob job = buildPendingDictationJob(UUID.randomUUID(), conversationId, "dictation/fail.webm");
+        job.setInputCleanupAt(Instant.now().minusSeconds(120));
+        job.setInputCleanedAt(null);
+        job.setStatus(MessageProcessingStatus.COMPLETED);
+
+        when(messageProcessingJobRepository.findDueDictationCleanupJobs(
+                eq(fit.iuh.cnm_project_be.message_processing.enums.MessageProcessingJobScope.DICTATION),
+                any(Instant.class),
+                eq(PageRequest.of(0, 50)))).thenReturn(List.of(job));
+        when(messageProcessingJobRepository.save(any(MessageProcessingJob.class)))
+                .thenAnswer(invocation -> invocation.getArgument(0));
+        doThrow(new BusinessException("delete failed"))
+                .when(s3MediaStorageService)
+                .deleteByStorageKey("dictation/fail.webm");
+
+        int cleaned = messageProcessingService.processDueDictationInputCleanup(Instant.now());
+
+        assertThat(cleaned).isEqualTo(0);
+        assertThat(job.getInputCleanedAt()).isNull();
+        assertThat(job.getInputCleanupError()).contains("delete failed");
+        assertThat(job.getInputCleanupAt()).isNotNull();
+    }
+
     private Message buildMessage(Long id, UUID conversationId, MessageType type, String content) {
         Message message = new Message();
         message.setId(id);
@@ -431,6 +549,27 @@ class MessageProcessingServiceTest {
         job.setCreatedAt(Instant.now());
         job.setUpdatedAt(Instant.now());
         job.setNextAttemptAt(Instant.now());
+        return job;
+    }
+
+    private MessageProcessingJob buildPendingDictationJob(UUID jobId, UUID ownerConversationId, String storageKey) {
+        MessageProcessingJob job = new MessageProcessingJob();
+        job.setId(jobId);
+        job.setMessageId(null);
+        job.setConversationId(ownerConversationId);
+        job.setAttachmentId(null);
+        job.setJobType(MessageProcessingJobType.STT);
+        job.setJobScope(fit.iuh.cnm_project_be.message_processing.enums.MessageProcessingJobScope.DICTATION);
+        job.setStatus(MessageProcessingStatus.PENDING);
+        job.setProvider("openrouter");
+        job.setInputMimeType("audio/webm");
+        job.setInputStorageKey(storageKey);
+        job.setInputLanguage("vi");
+        job.setRetryCount(0);
+        job.setRequestedBy(actorId);
+        job.setCreatedAt(Instant.now().minusSeconds(5));
+        job.setUpdatedAt(Instant.now().minusSeconds(5));
+        job.setNextAttemptAt(Instant.now().minusSeconds(5));
         return job;
     }
 }
