@@ -25,4 +25,16 @@ public class MessageProcessingScheduler {
             log.warn("[MessageProcessingScheduler] failed: {}", ex.getMessage());
         }
     }
+
+    @Scheduled(fixedDelayString = "${app.message-processing.dictation.cleanup-fixed-delay-ms:3600000}")
+    public void cleanupDictationInputs() {
+        try {
+            int cleaned = messageProcessingService.processDueDictationInputCleanup(Instant.now());
+            if (cleaned > 0) {
+                log.info("[MessageProcessingScheduler] cleanedDictationInputs={}", cleaned);
+            }
+        } catch (Exception ex) {
+            log.warn("[MessageProcessingScheduler] dictation cleanup failed: {}", ex.getMessage());
+        }
+    }
 }

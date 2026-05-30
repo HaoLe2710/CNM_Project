@@ -1,6 +1,7 @@
 package fit.iuh.cnm_project_be.message_processing.repository;
 
 import fit.iuh.cnm_project_be.message_processing.entity.MessageProcessingJob;
+import fit.iuh.cnm_project_be.message_processing.enums.MessageProcessingJobScope;
 import fit.iuh.cnm_project_be.message_processing.enums.MessageProcessingJobType;
 import fit.iuh.cnm_project_be.message_processing.enums.MessageProcessingStatus;
 import org.junit.jupiter.api.BeforeEach;
@@ -59,7 +60,10 @@ class MessageProcessingJobRepositoryTest {
                     updated_at timestamp not null,
                     started_at timestamp null,
                     completed_at timestamp null,
-                    next_attempt_at timestamp null
+                    next_attempt_at timestamp null,
+                    input_cleanup_at timestamp null,
+                    input_cleaned_at timestamp null,
+                    input_cleanup_error clob null
                 )
                 """);
         jdbcTemplate.execute("delete from message_processing_jobs");
@@ -83,7 +87,7 @@ class MessageProcessingJobRepositoryTest {
         UUID actorId = UUID.randomUUID();
         saveJob(200L, null, MessageProcessingJobType.TTS, MessageProcessingStatus.PENDING, actorId, Instant.now().minusSeconds(20));
         saveJob(201L, null, MessageProcessingJobType.TTS, MessageProcessingStatus.PROCESSING, actorId, Instant.now().minusSeconds(10));
-        saveJob(202L, null, MessageProcessingJobType.TTS, MessageProcessingStatus.PENDING, actorId, Instant.now());
+        saveJob(202L, null, MessageProcessingJobType.TTS, MessageProcessingStatus.PENDING, actorId, Instant.now().minusSeconds(1));
 
         List<MessageProcessingJob> pending = messageProcessingJobRepository.findRunnableByStatusOrderByCreatedAtAsc(
                 MessageProcessingStatus.PENDING,
@@ -117,6 +121,43 @@ class MessageProcessingJobRepositoryTest {
         MessageProcessingJob refreshed = messageProcessingJobRepository.findById(pendingJob.getId()).orElseThrow();
         assertThat(refreshed.getStatus()).isEqualTo(MessageProcessingStatus.PROCESSING);
         assertThat(refreshed.getStartedAt()).isNotNull();
+    }
+
+    @Test
+    void findDueDictationCleanupJobsReturnsOnlyDueUncleanedDictationRows() {
+        UUID actorId = UUID.randomUUID();
+        MessageProcessingJob dueDictation = saveJob(
+                null,
+                null,
+                MessageProcessingJobType.STT,
+                MessageProcessingStatus.COMPLETED,
+                actorId,
+                Instant.now().minusSeconds(30));
+        dueDictation.setJobScope(MessageProcessingJobScope.DICTATION);
+        dueDictation.setInputStorageKey("dictation/a.webm");
+        dueDictation.setInputCleanupAt(Instant.now().minusSeconds(10));
+        dueDictation.setInputCleanedAt(null);
+        messageProcessingJobRepository.saveAndFlush(dueDictation);
+
+        MessageProcessingJob futureDictation = saveJob(
+                null,
+                null,
+                MessageProcessingJobType.STT,
+                MessageProcessingStatus.COMPLETED,
+                actorId,
+                Instant.now().minusSeconds(20));
+        futureDictation.setJobScope(MessageProcessingJobScope.DICTATION);
+        futureDictation.setInputStorageKey("dictation/b.webm");
+        futureDictation.setInputCleanupAt(Instant.now().plusSeconds(60));
+        messageProcessingJobRepository.saveAndFlush(futureDictation);
+
+        List<MessageProcessingJob> dueRows = messageProcessingJobRepository.findDueDictationCleanupJobs(
+                MessageProcessingJobScope.DICTATION,
+                Instant.now(),
+                PageRequest.of(0, 10));
+
+        assertThat(dueRows).hasSize(1);
+        assertThat(dueRows.get(0).getId()).isEqualTo(dueDictation.getId());
     }
 
     private MessageProcessingJob saveJob(

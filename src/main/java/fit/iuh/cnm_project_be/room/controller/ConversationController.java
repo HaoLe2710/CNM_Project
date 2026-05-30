@@ -188,18 +188,18 @@ public class ConversationController {
     }
 
     @PatchMapping("/{conversationId}/background")
-    public ApiResponse<Void> updateBackground(
+    public ApiResponse<ConversationResponse> updateBackground(
             @PathVariable UUID conversationId,
             @Valid @RequestBody UpdateConversationBackgroundRequest request,
             @RequestHeader("x-user-id") UUID userId) {
-        conversationService.updateBackground(
+        ConversationResponse response = conversationService.updateBackground(
                 conversationId,
                 userId,
                 request.getBackgroundType(),
                 request.getBackgroundColor(),
                 request.getBackgroundImageUrl()
         );
-        return ApiResponse.ok(null, UUID.randomUUID().toString());
+        return ApiResponse.ok(response, UUID.randomUUID().toString());
     }
 
     @PostMapping(value = "/{conversationId}/background-image", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)

@@ -9,6 +9,7 @@ import fit.iuh.cnm_project_be.message.entity.MessageAttachment;
 import fit.iuh.cnm_project_be.message.entity.MessageUserState;
 import fit.iuh.cnm_project_be.message.enums.MessageType;
 import fit.iuh.cnm_project_be.message.repository.MessageAttachmentRepository;
+import fit.iuh.cnm_project_be.message.repository.ConversationMemberReadStateRepository;
 import fit.iuh.cnm_project_be.message.repository.MessageReactionRepository;
 import fit.iuh.cnm_project_be.message.repository.MessageRepository;
 import fit.iuh.cnm_project_be.message.repository.MessageStatusRepository;
@@ -60,6 +61,8 @@ class MessageServiceVoiceMetadataTest {
     private MessageAttachmentRepository messageAttachmentRepository;
     @Mock
     private MessageReactionRepository messageReactionRepository;
+    @Mock
+    private ConversationMemberReadStateRepository conversationMemberReadStateRepository;
     @Mock
     private MessageStatusRepository messageStatusRepository;
     @Mock
