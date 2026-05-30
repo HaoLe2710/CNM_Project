@@ -1,6 +1,7 @@
 package fit.iuh.cnm_project_be.auth.service;
 
 import fit.iuh.cnm_project_be.auth.utils.JwtUtils;
+import fit.iuh.cnm_project_be.notification.service.DeviceTokenService;
 import fit.iuh.cnm_project_be.user.enums.Platform;
 import fit.iuh.cnm_project_be.user.service.UserDeviceService;
 import fit.iuh.cnm_project_be.user.service.UserService;
@@ -33,6 +34,7 @@ public class LogoutService {
     JwtUtils jwtUtils;
     UserDeviceService userDeviceService;
     UserService userService;
+    DeviceTokenService deviceTokenService;
 
     @Transactional
     public boolean logout(HttpServletRequest request, HttpServletResponse response) {
@@ -94,6 +96,7 @@ public class LogoutService {
             tokenRedisService.deleteRefreshTokensByScope(userId, normalizedPlatform, deviceId);
 
             if (deviceId != null && !deviceId.isBlank()) {
+                deviceTokenService.revokeDeviceToken(userId, deviceId, platformRaw);
                 userDeviceService.deleteDevice(userId, deviceId, platformRaw);
             }
 

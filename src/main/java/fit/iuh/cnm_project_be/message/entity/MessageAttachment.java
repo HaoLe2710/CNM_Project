@@ -36,6 +36,15 @@ public class MessageAttachment {
 
     private Long fileSize;
 
+    @Column(name = "duration_ms")
+    private Long durationMs;
+
+    @Column(name = "waveform")
+    private String waveform;
+
+    @Column(name = "audio_format")
+    private String audioFormat;
+
     @Column(name = "created_at", nullable = false)
     private Instant createdAt = Instant.now();
 }

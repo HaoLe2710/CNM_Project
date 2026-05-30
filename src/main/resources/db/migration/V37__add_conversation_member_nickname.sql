@@ -1,0 +1,2 @@
+ALTER TABLE conversation_members
+ADD COLUMN IF NOT EXISTS nickname VARCHAR(100) NULL;

@@ -1,0 +1,4 @@
+ALTER TABLE message_attachments
+    ADD COLUMN IF NOT EXISTS duration_ms BIGINT NULL,
+    ADD COLUMN IF NOT EXISTS waveform TEXT NULL,
+    ADD COLUMN IF NOT EXISTS audio_format VARCHAR(32) NULL;

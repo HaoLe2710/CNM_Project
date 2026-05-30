@@ -46,6 +46,8 @@ public class FriendMapper {
         return FriendshipResponse.builder()
                 .friendshipId(friendship.getId())
                 .createdAt(friendship.getCreatedAt())
+                .isCloseFriend(friendship.isCloseFriend())
+                .closeFriendNote(friendship.getCloseFriendNote())
                 .friend(toUserSummary(friend))
                 .build();
     }

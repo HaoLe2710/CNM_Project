@@ -10,9 +10,13 @@ import org.springframework.web.multipart.MultipartFile;
 import software.amazon.awssdk.auth.credentials.AwsBasicCredentials;
 import software.amazon.awssdk.auth.credentials.DefaultCredentialsProvider;
 import software.amazon.awssdk.auth.credentials.StaticCredentialsProvider;
+import software.amazon.awssdk.core.ResponseBytes;
 import software.amazon.awssdk.core.sync.RequestBody;
 import software.amazon.awssdk.regions.Region;
 import software.amazon.awssdk.services.s3.S3Client;
+import software.amazon.awssdk.services.s3.model.DeleteObjectRequest;
+import software.amazon.awssdk.services.s3.model.GetObjectRequest;
+import software.amazon.awssdk.services.s3.model.GetObjectResponse;
 import software.amazon.awssdk.services.s3.model.PutObjectRequest;
 
 import java.io.IOException;
@@ -30,6 +34,10 @@ public class S3MediaStorageService {
     private final AwsS3Properties awsS3Properties;
 
     public UploadAttachmentResponse upload(UUID userId, MultipartFile file) {
+        return upload(userId, file, properties.getPathPrefix());
+    }
+
+    public UploadAttachmentResponse upload(UUID userId, MultipartFile file, String pathPrefix) {
         if (file == null || file.isEmpty()) {
             throw new BusinessException("Attachment file is required");
         }
@@ -44,7 +52,7 @@ public class S3MediaStorageService {
 
         String resolvedContentType = resolveContentType(file);
         MessageType resolvedMessageType = resolveMessageType(resolvedContentType, file.getOriginalFilename());
-        String storageKey = buildStorageKey(userId, file.getOriginalFilename());
+        String storageKey = buildStorageKey(userId, file.getOriginalFilename(), pathPrefix);
 
         try (S3Client s3Client = buildClient()) {
             PutObjectRequest request = PutObjectRequest.builder()
@@ -70,6 +78,103 @@ public class S3MediaStorageService {
                 .build();
     }
 
+    public UploadAttachmentResponse uploadBytes(
+            UUID userId,
+            byte[] bytes,
+            String fileName,
+            String contentType,
+            String pathPrefix) {
+        if (bytes == null || bytes.length == 0) {
+            throw new BusinessException("Attachment content is required");
+        }
+        if (resolveBucket() == null) {
+            throw new BusinessException("S3 bucket is not configured");
+        }
+        if (resolveRegion() == null) {
+            throw new BusinessException("S3 region is not configured");
+        }
+
+        String resolvedFileName = fileName == null || fileName.isBlank() ? DEFAULT_FILE_NAME : fileName;
+        String resolvedContentType = resolveContentType(contentType, resolvedFileName);
+        MessageType resolvedMessageType = resolveMessageType(resolvedContentType, resolvedFileName);
+        validateFileSize(bytes.length, resolvedMessageType);
+        String storageKey = buildStorageKey(userId, resolvedFileName, pathPrefix);
+
+        try (S3Client s3Client = buildClient()) {
+            PutObjectRequest request = PutObjectRequest.builder()
+                    .bucket(resolveBucket())
+                    .key(storageKey)
+                    .contentType(resolvedContentType)
+                    .build();
+
+            s3Client.putObject(request, RequestBody.fromBytes(bytes));
+        } catch (Exception ex) {
+            throw new BusinessException("Failed to upload attachment");
+        }
+
+        return UploadAttachmentResponse.builder()
+                .url(resolvePublicUrl(storageKey))
+                .storageKey(storageKey)
+                .fileName(resolvedFileName)
+                .contentType(resolvedContentType)
+                .fileSize((long) bytes.length)
+                .type(resolvedMessageType)
+                .build();
+    }
+
+    public void deleteByStorageKey(String storageKey) {
+        String normalizedStorageKey = trimToNull(storageKey);
+        if (normalizedStorageKey == null) {
+            return;
+        }
+        if (resolveBucket() == null) {
+            throw new BusinessException("S3 bucket is not configured");
+        }
+        if (resolveRegion() == null) {
+            throw new BusinessException("S3 region is not configured");
+        }
+
+        try (S3Client s3Client = buildClient()) {
+            DeleteObjectRequest request = DeleteObjectRequest.builder()
+                    .bucket(resolveBucket())
+                    .key(normalizedStorageKey)
+                    .build();
+            s3Client.deleteObject(request);
+        } catch (Exception ex) {
+            throw new BusinessException("Failed to delete cloud file from storage");
+        }
+    }
+
+    public byte[] downloadByStorageKey(String storageKey) {
+        String normalizedStorageKey = trimToNull(storageKey);
+        if (normalizedStorageKey == null) {
+            throw new BusinessException("Storage key is required");
+        }
+        if (resolveBucket() == null) {
+            throw new BusinessException("S3 bucket is not configured");
+        }
+        if (resolveRegion() == null) {
+            throw new BusinessException("S3 region is not configured");
+        }
+
+        try (S3Client s3Client = buildClient()) {
+            GetObjectRequest request = GetObjectRequest.builder()
+                    .bucket(resolveBucket())
+                    .key(normalizedStorageKey)
+                    .build();
+            ResponseBytes<GetObjectResponse> responseBytes = s3Client.getObjectAsBytes(request);
+            byte[] bytes = responseBytes != null ? responseBytes.asByteArray() : null;
+            if (bytes == null || bytes.length == 0) {
+                throw new BusinessException("Attachment content is empty");
+            }
+            return bytes;
+        } catch (BusinessException ex) {
+            throw ex;
+        } catch (Exception ex) {
+            throw new BusinessException("Failed to download attachment");
+        }
+    }
+
     private S3Client buildClient() {
         var builder = S3Client.builder()
                 .region(Region.of(resolveRegion()));
@@ -92,10 +197,11 @@ public class S3MediaStorageService {
         return builder.build();
     }
 
-    private String buildStorageKey(UUID userId, String originalFileName) {
+    private String buildStorageKey(UUID userId, String originalFileName, String pathPrefix) {
         String fileName = originalFileName == null || originalFileName.isBlank() ? DEFAULT_FILE_NAME : originalFileName;
         String sanitized = fileName.replaceAll("[^a-zA-Z0-9._-]", "_");
-        return properties.getPathPrefix() + "/" + userId + "/" + Instant.now().toEpochMilli() + "-" + UUID.randomUUID() + "-" + sanitized;
+        String normalizedPrefix = normalizePathPrefix(pathPrefix);
+        return normalizedPrefix + "/" + userId + "/" + Instant.now().toEpochMilli() + "-" + UUID.randomUUID() + "-" + sanitized;
     }
 
     private String resolvePublicUrl(String storageKey) {
@@ -128,6 +234,10 @@ public class S3MediaStorageService {
     private void validateFileSize(MultipartFile file) {
         MessageType messageType = resolveMessageType(resolveContentType(file), file.getOriginalFilename());
         long fileSize = file.getSize();
+        validateFileSize(fileSize, messageType);
+    }
+
+    private void validateFileSize(long fileSize, MessageType messageType) {
         long maxSize = switch (messageType) {
             case IMAGE -> properties.getMaxImageSizeBytes();
             case VIDEO -> properties.getMaxVideoSizeBytes();
@@ -144,11 +254,13 @@ public class S3MediaStorageService {
     }
 
     private String resolveContentType(MultipartFile file) {
-        String contentType = file.getContentType();
+        return resolveContentType(file != null ? file.getContentType() : null, file != null ? file.getOriginalFilename() : null);
+    }
+
+    private String resolveContentType(String contentType, String fileName) {
         if (contentType != null && !contentType.isBlank() && !"application/octet-stream".equalsIgnoreCase(contentType)) {
             return contentType;
         }
-        String fileName = file.getOriginalFilename();
         if (fileName == null) {
             return contentType;
         }
@@ -174,6 +286,18 @@ public class S3MediaStorageService {
         if (normalized.endsWith(".mov")) {
             return "video/quicktime";
         }
+        if (normalized.endsWith(".mp3")) {
+            return "audio/mpeg";
+        }
+        if (normalized.endsWith(".wav")) {
+            return "audio/wav";
+        }
+        if (normalized.endsWith(".ogg")) {
+            return "audio/ogg";
+        }
+        if (normalized.endsWith(".m4a")) {
+            return "audio/mp4";
+        }
         return contentType;
     }
 
@@ -195,6 +319,15 @@ public class S3MediaStorageService {
                 || normalized.endsWith(".webm")
                 || normalized.endsWith(".m4v")) {
             return MessageType.VIDEO;
+        }
+        if (normalized.endsWith(".mp3")
+                || normalized.endsWith(".wav")
+                || normalized.endsWith(".ogg")
+                || normalized.endsWith(".m4a")
+                || normalized.endsWith(".aac")
+                || normalized.endsWith(".opus")
+                || normalized.endsWith(".flac")) {
+            return MessageType.AUDIO;
         }
         return MessageType.FILE;
     }
@@ -235,5 +368,13 @@ public class S3MediaStorageService {
             return normalized;
         }
         return "https://" + normalized;
+    }
+
+    private String normalizePathPrefix(String value) {
+        String normalized = trimToNull(value);
+        if (normalized == null) {
+            return properties.getPathPrefix();
+        }
+        return normalized.replaceAll("^/+", "").replaceAll("/+$", "");
     }
 }

@@ -14,6 +14,7 @@ import fit.iuh.cnm_project_be.auth.dto.response.RefreshTokenResponse;
 import fit.iuh.cnm_project_be.auth.dto.response.SecurityHistoryItemResponse;
 import fit.iuh.cnm_project_be.auth.dto.response.UserDeviceResponseDto;
 import fit.iuh.cnm_project_be.auth.entity.SecurityAuditLog;
+import fit.iuh.cnm_project_be.notification.service.DeviceTokenService;
 import fit.iuh.cnm_project_be.user.enums.Platform;
 import fit.iuh.cnm_project_be.user.service.UserDeviceService;
 import fit.iuh.cnm_project_be.user.service.UserService;
@@ -58,6 +59,7 @@ public class AuthService {
     AccountService accountService;
     UserDeviceService userDeviceService;
     UserService userService;
+    DeviceTokenService deviceTokenService;
     TokenRedisService tokenRedisService;
     SecurityAuditService securityAuditService;
 
@@ -167,6 +169,7 @@ public class AuthService {
         String normalizedDeviceId = deviceId == null ? null : deviceId.trim();
 
         tokenRedisService.deleteRefreshTokensByScope(userId, normalizedPlatform, normalizedDeviceId);
+        deviceTokenService.revokeDeviceToken(userId, normalizedDeviceId, platform);
         userDeviceService.deleteDevice(userId, normalizedDeviceId, platform);
 
         try {
