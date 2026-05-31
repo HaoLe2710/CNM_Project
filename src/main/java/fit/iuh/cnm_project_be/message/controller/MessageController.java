@@ -3,6 +3,8 @@ package fit.iuh.cnm_project_be.message.controller;
 import fit.iuh.cnm_project_be.common.api.ApiResponse;
 import fit.iuh.cnm_project_be.message.dto.CursorPageResponse;
 import fit.iuh.cnm_project_be.message.dto.EditMessageRequest;
+import fit.iuh.cnm_project_be.message.dto.MarkConversationDeliveredRequest;
+import fit.iuh.cnm_project_be.message.dto.MarkConversationSeenRequest;
 import fit.iuh.cnm_project_be.message.dto.MessageContextResponse;
 import fit.iuh.cnm_project_be.message.dto.PinMessageRequest;
 import fit.iuh.cnm_project_be.message.dto.MessageReactionRequest;
@@ -108,8 +110,26 @@ public class MessageController {
     @PatchMapping("/mark-seen/{conversationId}")
     public ApiResponse<Void> markAsSeen(
             @PathVariable UUID conversationId,
+            @RequestBody(required = false) MarkConversationSeenRequest request,
             @RequestHeader("x-user-id") UUID currentUserId) {
-        messageService.markAsSeen(conversationId, currentUserId);
+        messageService.markAsSeen(
+                conversationId,
+                currentUserId,
+                request != null ? request.getLastReadMessageId() : null
+        );
+        return ApiResponse.ok(null, UUID.randomUUID().toString());
+    }
+
+    @PatchMapping("/mark-delivered/{conversationId}")
+    public ApiResponse<Void> markAsDelivered(
+            @PathVariable UUID conversationId,
+            @RequestBody(required = false) MarkConversationDeliveredRequest request,
+            @RequestHeader("x-user-id") UUID currentUserId) {
+        messageService.markAsDelivered(
+                conversationId,
+                currentUserId,
+                request != null ? request.getLastDeliveredMessageId() : null
+        );
         return ApiResponse.ok(null, UUID.randomUUID().toString());
     }
 

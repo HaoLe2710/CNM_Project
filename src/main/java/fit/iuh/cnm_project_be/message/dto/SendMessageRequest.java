@@ -24,4 +24,7 @@ public class SendMessageRequest {
 
     @Valid
     private List<MessageAttachmentPayload> attachments;
+
+    @Valid
+    private List<MessageMentionPayload> mentions;
 }

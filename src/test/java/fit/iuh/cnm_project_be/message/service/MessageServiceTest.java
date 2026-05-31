@@ -3,19 +3,24 @@ package fit.iuh.cnm_project_be.message.service;
 import fit.iuh.cnm_project_be.common.exception.NotFoundException;
 import fit.iuh.cnm_project_be.message.dto.EditMessageRequest;
 import fit.iuh.cnm_project_be.message.dto.MessageAttachmentPayload;
+import fit.iuh.cnm_project_be.message.dto.MessageDeliveryReceiptPayload;
+import fit.iuh.cnm_project_be.message.dto.MessageReadReceiptPayload;
 import fit.iuh.cnm_project_be.message.dto.MessageResponse;
 import fit.iuh.cnm_project_be.message.dto.SendMessageRequest;
+import fit.iuh.cnm_project_be.message.entity.ConversationMemberReadState;
 import fit.iuh.cnm_project_be.message.entity.MessageAttachment;
 import fit.iuh.cnm_project_be.message.entity.Message;
 import fit.iuh.cnm_project_be.message.entity.MessageUserState;
 import fit.iuh.cnm_project_be.message.enums.MessageDeliveryStatus;
 import fit.iuh.cnm_project_be.message.enums.MessageType;
 import fit.iuh.cnm_project_be.message.repository.MessageAttachmentRepository;
+import fit.iuh.cnm_project_be.message.repository.ConversationMemberReadStateRepository;
 import fit.iuh.cnm_project_be.message.repository.MessageReactionRepository;
 import fit.iuh.cnm_project_be.message.repository.MessageRepository;
 import fit.iuh.cnm_project_be.message.repository.MessageStatusRepository;
 import fit.iuh.cnm_project_be.message.repository.MessageUserStateRepository;
 import fit.iuh.cnm_project_be.realtime.dto.RealtimeEvent;
+import fit.iuh.cnm_project_be.realtime.dto.RealtimeEventType;
 import fit.iuh.cnm_project_be.room.dto.ConversationResponse;
 import fit.iuh.cnm_project_be.room.entity.Conversation;
 import fit.iuh.cnm_project_be.room.entity.ConversationMember;
@@ -53,7 +58,9 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.verifyNoMoreInteractions;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.when;
+import static org.mockito.ArgumentMatchers.argThat;
 
 @ExtendWith(MockitoExtension.class)
 class MessageServiceTest {
@@ -64,6 +71,8 @@ class MessageServiceTest {
     private MessageAttachmentRepository messageAttachmentRepository;
     @Mock
     private MessageReactionRepository messageReactionRepository;
+    @Mock
+    private ConversationMemberReadStateRepository conversationMemberReadStateRepository;
     @Mock
     private MessageStatusRepository messageStatusRepository;
     @Mock
@@ -109,9 +118,7 @@ class MessageServiceTest {
         when(conversationRepository.findById(conversationId)).thenReturn(Optional.of(conversation));
         when(conversationMemberRepository.existsByConversationIdAndUserId(conversationId, senderId)).thenReturn(true);
         when(conversationMemberRepository.findByConversationId(conversationId))
-                .thenReturn(List.of(member(conversationId, senderId), member(conversationId, recipientId)))
-                .thenReturn(List.of(member(conversationId, senderId), member(conversationId, recipientId)))
-                .thenReturn(List.of());
+                .thenReturn(List.of(member(conversationId, senderId), member(conversationId, recipientId)));
         when(messageRepository.save(any(Message.class))).thenAnswer(invocation -> {
             Message message = invocation.getArgument(0);
             message.setId(100L);
@@ -326,12 +333,242 @@ class MessageServiceTest {
 
         when(conversationRepository.findById(conversationId)).thenReturn(Optional.of(conversation));
         when(conversationMemberRepository.existsByConversationIdAndUserId(conversationId, userId)).thenReturn(true);
-        when(conversationMemberRepository.findByConversationId(conversationId)).thenReturn(List.of());
 
         messageService.markAsSeen(conversationId, userId);
 
         verify(messageUserStateRepository).markConversationAsSeen(eq(conversationId), eq(userId), any(Instant.class), any(Instant.class));
         verifyNoInteractions(messageStatusRepository);
+    }
+
+    @Test
+    void markAsSeenWithLastReadMessageIdUpdatesCursorAndPublishesReadReceiptEvent() {
+        UUID conversationId = UUID.randomUUID();
+        UUID userId = UUID.randomUUID();
+
+        Conversation conversation = new Conversation();
+        conversation.setId(conversationId);
+        conversation.setCreatorId(userId);
+        conversation.setType(ConversationType.PRIVATE);
+
+        Message lastReadMessage = new Message();
+        lastReadMessage.setId(88L);
+        lastReadMessage.setConversationId(conversationId);
+        lastReadMessage.setSenderId(UUID.randomUUID());
+
+        when(conversationRepository.findById(conversationId)).thenReturn(Optional.of(conversation));
+        when(conversationMemberRepository.existsByConversationIdAndUserId(conversationId, userId)).thenReturn(true);
+        when(conversationMemberRepository.findByConversationId(conversationId)).thenReturn(List.of());
+        when(messageRepository.findByIdAndDeletedAtIsNull(88L)).thenReturn(Optional.of(lastReadMessage));
+        when(conversationMemberReadStateRepository.findByConversationIdAndUserId(conversationId, userId))
+                .thenReturn(Optional.empty());
+
+        messageService.markAsSeen(conversationId, userId, 88L);
+
+        ArgumentCaptor<ConversationMemberReadState> readStateCaptor =
+                ArgumentCaptor.forClass(ConversationMemberReadState.class);
+        verify(conversationMemberReadStateRepository).save(readStateCaptor.capture());
+        ConversationMemberReadState savedState = readStateCaptor.getValue();
+        assertThat(savedState.getConversationId()).isEqualTo(conversationId);
+        assertThat(savedState.getUserId()).isEqualTo(userId);
+        assertThat(savedState.getLastReadMessageId()).isEqualTo(88L);
+        assertThat(savedState.getLastReadAt()).isNotNull();
+
+        verify(messagingTemplate).convertAndSend(
+                eq("/topic/conversations/" + conversationId),
+                argThat((RealtimeEvent<?> event) -> {
+                    if (event == null || event.getType() != RealtimeEventType.MESSAGE_READ_RECEIPT_UPDATED) {
+                        return false;
+                    }
+                    Object payload = event.getPayload();
+                    if (!(payload instanceof MessageReadReceiptPayload readReceiptPayload)) {
+                        return false;
+                    }
+                    return conversationId.equals(readReceiptPayload.getConversationId())
+                            && userId.equals(readReceiptPayload.getUserId())
+                            && Long.valueOf(88L).equals(readReceiptPayload.getLastReadMessageId())
+                            && readReceiptPayload.getReadAt() != null;
+                })
+        );
+    }
+
+    @Test
+    void markAsSeenWithOlderCursorSkipsReadReceiptBroadcast() {
+        UUID conversationId = UUID.randomUUID();
+        UUID userId = UUID.randomUUID();
+
+        Conversation conversation = new Conversation();
+        conversation.setId(conversationId);
+        conversation.setCreatorId(userId);
+        conversation.setType(ConversationType.PRIVATE);
+
+        Message olderMessage = new Message();
+        olderMessage.setId(22L);
+        olderMessage.setConversationId(conversationId);
+        olderMessage.setSenderId(UUID.randomUUID());
+
+        ConversationMemberReadState existingState = new ConversationMemberReadState();
+        existingState.setConversationId(conversationId);
+        existingState.setUserId(userId);
+        existingState.setLastReadMessageId(50L);
+        existingState.setLastReadAt(Instant.now().minusSeconds(10));
+
+        when(conversationRepository.findById(conversationId)).thenReturn(Optional.of(conversation));
+        when(conversationMemberRepository.existsByConversationIdAndUserId(conversationId, userId)).thenReturn(true);
+        when(messageRepository.findByIdAndDeletedAtIsNull(22L)).thenReturn(Optional.of(olderMessage));
+        when(conversationMemberReadStateRepository.findByConversationIdAndUserId(conversationId, userId))
+                .thenReturn(Optional.of(existingState));
+
+        messageService.markAsSeen(conversationId, userId, 22L);
+
+        verify(messagingTemplate, never()).convertAndSend(eq("/topic/conversations/" + conversationId), any(RealtimeEvent.class));
+    }
+
+    @Test
+    void markAsDeliveredWithLastMessageIdUpdatesCursorAndPublishesDeliveryEvent() {
+        UUID conversationId = UUID.randomUUID();
+        UUID userId = UUID.randomUUID();
+
+        Conversation conversation = new Conversation();
+        conversation.setId(conversationId);
+        conversation.setCreatorId(userId);
+        conversation.setType(ConversationType.PRIVATE);
+
+        Message lastDeliveredMessage = new Message();
+        lastDeliveredMessage.setId(135L);
+        lastDeliveredMessage.setConversationId(conversationId);
+        lastDeliveredMessage.setSenderId(UUID.randomUUID());
+
+        when(conversationRepository.findById(conversationId)).thenReturn(Optional.of(conversation));
+        when(conversationMemberRepository.existsByConversationIdAndUserId(conversationId, userId)).thenReturn(true);
+        when(messageRepository.findByIdAndDeletedAtIsNull(135L)).thenReturn(Optional.of(lastDeliveredMessage));
+        when(conversationMemberReadStateRepository.findByConversationIdAndUserId(conversationId, userId))
+                .thenReturn(Optional.empty());
+
+        messageService.markAsDelivered(conversationId, userId, 135L);
+
+        ArgumentCaptor<ConversationMemberReadState> readStateCaptor =
+                ArgumentCaptor.forClass(ConversationMemberReadState.class);
+        verify(conversationMemberReadStateRepository).save(readStateCaptor.capture());
+        ConversationMemberReadState savedState = readStateCaptor.getValue();
+        assertThat(savedState.getConversationId()).isEqualTo(conversationId);
+        assertThat(savedState.getUserId()).isEqualTo(userId);
+        assertThat(savedState.getLastDeliveredMessageId()).isEqualTo(135L);
+        assertThat(savedState.getLastDeliveredAt()).isNotNull();
+
+        verify(messagingTemplate).convertAndSend(
+                eq("/topic/conversations/" + conversationId),
+                argThat((RealtimeEvent<?> event) -> {
+                    if (event == null || event.getType() != RealtimeEventType.MESSAGE_DELIVERY_UPDATED) {
+                        return false;
+                    }
+                    Object payload = event.getPayload();
+                    if (!(payload instanceof MessageDeliveryReceiptPayload deliveryPayload)) {
+                        return false;
+                    }
+                    return conversationId.equals(deliveryPayload.getConversationId())
+                            && userId.equals(deliveryPayload.getUserId())
+                            && Long.valueOf(135L).equals(deliveryPayload.getLastDeliveredMessageId())
+                            && deliveryPayload.getDeliveredAt() != null;
+                })
+        );
+    }
+
+    @Test
+    void markAsDeliveredWithOlderCursorSkipsDeliveryBroadcast() {
+        UUID conversationId = UUID.randomUUID();
+        UUID userId = UUID.randomUUID();
+
+        Conversation conversation = new Conversation();
+        conversation.setId(conversationId);
+        conversation.setCreatorId(userId);
+        conversation.setType(ConversationType.PRIVATE);
+
+        Message olderMessage = new Message();
+        olderMessage.setId(42L);
+        olderMessage.setConversationId(conversationId);
+        olderMessage.setSenderId(UUID.randomUUID());
+
+        ConversationMemberReadState existingState = new ConversationMemberReadState();
+        existingState.setConversationId(conversationId);
+        existingState.setUserId(userId);
+        existingState.setLastDeliveredMessageId(100L);
+        existingState.setLastDeliveredAt(Instant.now().minusSeconds(5));
+
+        when(conversationRepository.findById(conversationId)).thenReturn(Optional.of(conversation));
+        when(conversationMemberRepository.existsByConversationIdAndUserId(conversationId, userId)).thenReturn(true);
+        when(messageRepository.findByIdAndDeletedAtIsNull(42L)).thenReturn(Optional.of(olderMessage));
+        when(conversationMemberReadStateRepository.findByConversationIdAndUserId(conversationId, userId))
+                .thenReturn(Optional.of(existingState));
+
+        messageService.markAsDelivered(conversationId, userId, 42L);
+
+        verify(messagingTemplate, never()).convertAndSend(eq("/topic/conversations/" + conversationId), any(RealtimeEvent.class));
+    }
+
+    @Test
+    void markAsSeenWithSameCursorRapidlyIsThrottled() {
+        UUID conversationId = UUID.randomUUID();
+        UUID userId = UUID.randomUUID();
+
+        Conversation conversation = new Conversation();
+        conversation.setId(conversationId);
+        conversation.setCreatorId(userId);
+        conversation.setType(ConversationType.PRIVATE);
+
+        Message lastReadMessage = new Message();
+        lastReadMessage.setId(77L);
+        lastReadMessage.setConversationId(conversationId);
+        lastReadMessage.setSenderId(UUID.randomUUID());
+
+        when(conversationRepository.findById(conversationId)).thenReturn(Optional.of(conversation));
+        when(conversationMemberRepository.existsByConversationIdAndUserId(conversationId, userId)).thenReturn(true);
+        when(messageRepository.findByIdAndDeletedAtIsNull(77L)).thenReturn(Optional.of(lastReadMessage));
+        when(messageUserStateRepository.markConversationAsSeen(eq(conversationId), eq(userId), any(Instant.class), any(Instant.class)))
+                .thenReturn(1);
+        when(conversationMemberReadStateRepository.findByConversationIdAndUserId(conversationId, userId))
+                .thenReturn(Optional.empty());
+
+        messageService.markAsSeen(conversationId, userId, 77L);
+        messageService.markAsSeen(conversationId, userId, 77L);
+
+        verify(messageRepository, times(2)).findByIdAndDeletedAtIsNull(77L);
+        verify(messageUserStateRepository, times(1))
+                .markConversationAsSeen(eq(conversationId), eq(userId), any(Instant.class), any(Instant.class));
+        verify(conversationMemberReadStateRepository, times(1))
+                .findByConversationIdAndUserId(conversationId, userId);
+        verify(conversationMemberReadStateRepository, times(1)).save(any(ConversationMemberReadState.class));
+        verify(messagingTemplate, times(1)).convertAndSend(eq("/topic/conversations/" + conversationId), any(RealtimeEvent.class));
+    }
+
+    @Test
+    void markAsDeliveredWithSameCursorRapidlyIsThrottled() {
+        UUID conversationId = UUID.randomUUID();
+        UUID userId = UUID.randomUUID();
+
+        Conversation conversation = new Conversation();
+        conversation.setId(conversationId);
+        conversation.setCreatorId(userId);
+        conversation.setType(ConversationType.PRIVATE);
+
+        Message lastDeliveredMessage = new Message();
+        lastDeliveredMessage.setId(91L);
+        lastDeliveredMessage.setConversationId(conversationId);
+        lastDeliveredMessage.setSenderId(UUID.randomUUID());
+
+        when(conversationRepository.findById(conversationId)).thenReturn(Optional.of(conversation));
+        when(conversationMemberRepository.existsByConversationIdAndUserId(conversationId, userId)).thenReturn(true);
+        when(messageRepository.findByIdAndDeletedAtIsNull(91L)).thenReturn(Optional.of(lastDeliveredMessage));
+        when(conversationMemberReadStateRepository.findByConversationIdAndUserId(conversationId, userId))
+                .thenReturn(Optional.empty());
+
+        messageService.markAsDelivered(conversationId, userId, 91L);
+        messageService.markAsDelivered(conversationId, userId, 91L);
+
+        verify(messageRepository, times(2)).findByIdAndDeletedAtIsNull(91L);
+        verify(conversationMemberReadStateRepository, times(1))
+                .findByConversationIdAndUserId(conversationId, userId);
+        verify(conversationMemberReadStateRepository, times(1)).save(any(ConversationMemberReadState.class));
+        verify(messagingTemplate, times(1)).convertAndSend(eq("/topic/conversations/" + conversationId), any(RealtimeEvent.class));
     }
 
     @Test
@@ -416,6 +653,53 @@ class MessageServiceTest {
         verify(messageRepository).findVisibleMessages(eq(conversationId), eq(userId), any());
         verify(messageRepository, never()).findVisibleMessagesBeforeCursor(any(), any(), any(), any(), any());
         verifyNoInteractions(messageStatusRepository);
+    }
+
+    @Test
+    void getMessagesReturnsConversationMemberReadStates() {
+        UUID conversationId = UUID.randomUUID();
+        UUID currentUserId = UUID.randomUUID();
+        UUID peerUserId = UUID.randomUUID();
+        Conversation conversation = new Conversation();
+        conversation.setId(conversationId);
+        conversation.setCreatorId(currentUserId);
+        conversation.setType(ConversationType.PRIVATE);
+
+        Message message = new Message();
+        message.setId(99L);
+        message.setConversationId(conversationId);
+        message.setSenderId(peerUserId);
+        message.setContent("hello");
+        message.setMessageType(MessageType.TEXT);
+        message.setCreatedAt(Instant.parse("2026-05-31T00:00:00Z"));
+
+        ConversationMemberReadState currentState = new ConversationMemberReadState();
+        currentState.setConversationId(conversationId);
+        currentState.setUserId(currentUserId);
+        currentState.setLastReadMessageId(99L);
+        currentState.setLastReadAt(Instant.parse("2026-05-31T00:01:00Z"));
+
+        when(conversationRepository.findById(conversationId)).thenReturn(Optional.of(conversation));
+        when(conversationMemberRepository.existsByConversationIdAndUserId(conversationId, currentUserId)).thenReturn(true);
+        when(messageRepository.findVisibleMessages(eq(conversationId), eq(currentUserId), any()))
+                .thenReturn(List.of(message));
+        when(messageAttachmentRepository.findByMessageIdIn(List.of(99L))).thenReturn(List.of());
+        when(messageReactionRepository.findByMessageIdIn(List.of(99L))).thenReturn(List.of());
+        when(messageUserStateRepository.findByMessageIdInAndUserId(List.of(99L), currentUserId)).thenReturn(List.of());
+        when(conversationMemberReadStateRepository.findActiveByConversationId(conversationId))
+                .thenReturn(List.of(currentState));
+
+        var page = messageService.getMessages(conversationId, currentUserId, null, 50);
+
+        assertThat(page.getItems()).hasSize(1);
+        assertThat(page.getMemberReadStates()).hasSize(1);
+        assertThat(page.getMemberReadStates())
+                .anySatisfy(readState -> {
+                    if (currentUserId.equals(readState.getUserId())) {
+                        assertThat(readState.getLastReadMessageId()).isEqualTo(99L);
+                        assertThat(readState.getLastReadAt()).isEqualTo(Instant.parse("2026-05-31T00:01:00Z"));
+                    }
+                });
     }
 
     @Test

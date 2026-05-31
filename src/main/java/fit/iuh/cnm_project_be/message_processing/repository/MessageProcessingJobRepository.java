@@ -2,6 +2,7 @@ package fit.iuh.cnm_project_be.message_processing.repository;
 
 import fit.iuh.cnm_project_be.common.repository.BaseRepository;
 import fit.iuh.cnm_project_be.message_processing.entity.MessageProcessingJob;
+import fit.iuh.cnm_project_be.message_processing.enums.MessageProcessingJobScope;
 import fit.iuh.cnm_project_be.message_processing.enums.MessageProcessingJobType;
 import fit.iuh.cnm_project_be.message_processing.enums.MessageProcessingStatus;
 import org.springframework.data.domain.Pageable;
@@ -52,4 +53,19 @@ public interface MessageProcessingJobRepository extends BaseRepository<MessagePr
             @Param("pendingStatus") MessageProcessingStatus pendingStatus,
             @Param("processingStatus") MessageProcessingStatus processingStatus,
             @Param("startedAt") Instant startedAt);
+
+    @Query("""
+            select j
+            from MessageProcessingJob j
+            where j.jobScope = :jobScope
+              and j.inputStorageKey is not null
+              and j.inputCleanupAt is not null
+              and j.inputCleanupAt <= :now
+              and j.inputCleanedAt is null
+            order by j.inputCleanupAt asc, j.createdAt asc
+            """)
+    List<MessageProcessingJob> findDueDictationCleanupJobs(
+            @Param("jobScope") MessageProcessingJobScope jobScope,
+            @Param("now") Instant now,
+            Pageable pageable);
 }

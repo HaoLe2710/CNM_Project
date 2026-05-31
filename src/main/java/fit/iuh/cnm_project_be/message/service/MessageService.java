@@ -4,14 +4,18 @@ import fit.iuh.cnm_project_be.common.exception.BusinessException;
 import fit.iuh.cnm_project_be.common.exception.ForbiddenException;
 import fit.iuh.cnm_project_be.common.exception.NotFoundException;
 import fit.iuh.cnm_project_be.message.dto.CursorPageResponse;
+import fit.iuh.cnm_project_be.message.dto.ConversationMemberReadStateResponse;
 import fit.iuh.cnm_project_be.message.dto.EditMessageRequest;
 import fit.iuh.cnm_project_be.message.dto.MessageAttachmentPayload;
 import fit.iuh.cnm_project_be.message.dto.MessageAttachmentResponse;
 import fit.iuh.cnm_project_be.message.dto.MessageContextResponse;
 import fit.iuh.cnm_project_be.message.dto.MessageDeletedPayload;
+import fit.iuh.cnm_project_be.message.dto.MessageDeliveryReceiptPayload;
+import fit.iuh.cnm_project_be.message.dto.MessageMentionPayload;
 import fit.iuh.cnm_project_be.message.dto.MessageReactionEventPayload;
 import fit.iuh.cnm_project_be.message.dto.MessageReactionRequest;
 import fit.iuh.cnm_project_be.message.dto.MessageReactionSummary;
+import fit.iuh.cnm_project_be.message.dto.MessageReadReceiptPayload;
 import fit.iuh.cnm_project_be.message.dto.MessageResponse;
 import fit.iuh.cnm_project_be.message.dto.MessageStatusPayload;
 import fit.iuh.cnm_project_be.message.dto.ReplyInfo;
@@ -20,6 +24,7 @@ import fit.iuh.cnm_project_be.message.dto.TypingRealtimePayload;
 import fit.iuh.cnm_project_be.message.dto.UploadAttachmentResponse;
 import fit.iuh.cnm_project_be.message.entity.Message;
 import fit.iuh.cnm_project_be.message.entity.MessageAttachment;
+import fit.iuh.cnm_project_be.message.entity.ConversationMemberReadState;
 import fit.iuh.cnm_project_be.message.entity.MessageReaction;
 import fit.iuh.cnm_project_be.message.entity.MessageStatus;
 import fit.iuh.cnm_project_be.message.entity.MessageUserState;
@@ -27,6 +32,7 @@ import fit.iuh.cnm_project_be.message.enums.MessageDeliveryStatus;
 import fit.iuh.cnm_project_be.message.enums.MessageReactionType;
 import fit.iuh.cnm_project_be.message.enums.MessageType;
 import fit.iuh.cnm_project_be.message.repository.MessageAttachmentRepository;
+import fit.iuh.cnm_project_be.message.repository.ConversationMemberReadStateRepository;
 import fit.iuh.cnm_project_be.message.repository.MessageReactionRepository;
 import fit.iuh.cnm_project_be.message.repository.MessageRepository;
 import fit.iuh.cnm_project_be.message.repository.MessageStatusRepository;
@@ -78,12 +84,16 @@ import java.util.Comparator;
 import java.util.EnumMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
+import java.util.Optional;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
@@ -100,13 +110,15 @@ public class MessageService {
     private static final int MAX_WAVEFORM_SAMPLES = 128;
     private static final int MAX_AUDIO_FORMAT_LENGTH = 32;
     private static final String GROUP_SYSTEM_PREFIX = "[[GROUP_SYSTEM]]";
-    private static final Pattern MENTION_PATTERN = Pattern.compile("(?<![A-Za-z0-9._])@([A-Za-z0-9._]+)");
+    private static final Pattern MENTION_PATTERN = Pattern.compile("(?<![A-Za-z0-9._-])@([A-Za-z0-9._-]+)");
     private static final Pattern ABSOLUTE_URL_PATTERN = Pattern.compile("^(?i)https?://\\S+$");
     private static final String SIMPLE_JSON_STRING_FIELD_REGEX = "\"%s\"\\s*:\\s*\"((?:\\\\.|[^\"\\\\])*)\"";
+    private static final long DEFAULT_CURSOR_THROTTLE_MS = 400L;
 
     private final MessageRepository messageRepository;
     private final MessageAttachmentRepository messageAttachmentRepository;
     private final MessageReactionRepository messageReactionRepository;
+    private final ConversationMemberReadStateRepository conversationMemberReadStateRepository;
     private final MessageStatusRepository messageStatusRepository;
     private final MessageUserStateRepository messageUserStateRepository;
     private final ConversationRepository conversationRepository;
@@ -123,14 +135,28 @@ public class MessageService {
     @Value("${app.message.unsend-window-minutes:15}")
     private long unsendWindowMinutes;
 
+    @Value("${app.message.read-cursor.seen-throttle-ms:400}")
+    private long seenCursorThrottleMs = 400L;
+
+    @Value("${app.message.read-cursor.delivered-throttle-ms:300}")
+    private long deliveredCursorThrottleMs = 300L;
+
+    private final ConcurrentMap<String, CursorThrottleState> cursorThrottleStateByKey = new ConcurrentHashMap<>();
+
     @Transactional
     public MessageResponse sendMessage(UUID senderId, SendMessageRequest request) {
         Conversation conversation = getConversationOrThrow(request.getConversationId());
         ensureConversationMember(conversation.getId(), senderId);
         ensurePrivateConversationInteractionAllowed(conversation, senderId);
         validatePayload(request);
+        List<ConversationMember> members = conversationMemberRepository.findByConversationId(conversation.getId());
         String normalizedContent = normalizeNullableText(request.getContent());
         String resolvedOriginalLinkUrl = resolveOriginalLinkUrl(normalizedContent, request.getOriginalLinkUrl());
+        Set<UUID> mentionedUserIds = resolveMentionedUserIds(
+                conversation,
+                members,
+                normalizedContent,
+                request.getMentions());
 
         Message message = new Message();
         message.setConversationId(conversation.getId());
@@ -153,8 +179,8 @@ public class MessageService {
         MessageResponse response = mapToResponse(savedMessage, senderId, attachments, Collections.emptyList(), senderState);
         messagingTemplate.convertAndSend("/topic/conversations/" + conversation.getId(),
                 RealtimeEvent.of(RealtimeEventType.MESSAGE_CREATED, response));
-        broadcastConversationUpdatesForNewMessage(conversation, savedMessage);
-        safeDispatchMessageNotifications(conversation, savedMessage);
+        broadcastConversationUpdatesForNewMessage(conversation, mentionedUserIds);
+        safeDispatchMessageNotifications(conversation, savedMessage, mentionedUserIds);
 
         return response;
     }
@@ -176,12 +202,14 @@ public class MessageService {
                 : fetchedMessages;
 
         List<MessageResponse> items = mapToResponses(visibleMessages, currentUserId);
+        List<ConversationMemberReadStateResponse> memberReadStates = buildConversationMemberReadStates(conversationId);
         String nextCursor = hasMore ? encodeCursor(visibleMessages.get(visibleMessages.size() - 1)) : null;
 
         return CursorPageResponse.<MessageResponse>builder()
                 .items(items)
                 .nextCursor(nextCursor)
                 .hasMore(hasMore)
+                .memberReadStates(memberReadStates)
                 .build();
     }
 
@@ -416,15 +444,95 @@ public class MessageService {
     // Seen/read state is authoritative in message_user_states; no transport-state write is needed here.
     @Transactional
     public void markAsSeen(UUID conversationId, UUID userId) {
+        markAsSeen(conversationId, userId, null);
+    }
+
+    @Transactional
+    public void markAsSeen(UUID conversationId, UUID userId, Long lastReadMessageId) {
         getConversationOrThrow(conversationId);
         ensureConversationMember(conversationId, userId);
-        Instant now = Instant.now();
-        messageUserStateRepository.markConversationAsSeen(conversationId, userId, now, now);
+        Long resolvedLastReadMessageId = resolveRequestedLastReadMessageId(conversationId, userId, lastReadMessageId);
+        if (isCursorUpdateThrottled(conversationId, userId, resolvedLastReadMessageId, CursorType.READ)) {
+            return;
+        }
 
-        messagingTemplate.convertAndSend("/topic/users/" + userId + "/conversations/status",
-                RealtimeEvent.of(RealtimeEventType.CONVERSATION_UPDATED,
-                        new ConversationStatusPayload(conversationId, "SEEN", null)));
-        broadcastConversationUpdates(conversationId);
+        Instant now = Instant.now();
+        int seenRowsUpdated = messageUserStateRepository.markConversationAsSeen(conversationId, userId, now, now);
+
+        boolean cursorChanged = false;
+        if (resolvedLastReadMessageId != null) {
+            cursorChanged = upsertConversationReadCursor(
+                    conversationId,
+                    userId,
+                    resolvedLastReadMessageId,
+                    now
+            );
+            if (cursorChanged) {
+                messagingTemplate.convertAndSend(
+                        "/topic/conversations/" + conversationId,
+                        RealtimeEvent.of(
+                                RealtimeEventType.MESSAGE_READ_RECEIPT_UPDATED,
+                                new MessageReadReceiptPayload(
+                                        conversationId,
+                                        userId,
+                                        resolvedLastReadMessageId,
+                                        now
+                                )
+                        )
+                );
+            }
+        }
+
+        if (seenRowsUpdated > 0 || cursorChanged) {
+            messagingTemplate.convertAndSend("/topic/users/" + userId + "/conversations/status",
+                    RealtimeEvent.of(RealtimeEventType.CONVERSATION_UPDATED,
+                            new ConversationStatusPayload(conversationId, "SEEN", null)));
+            broadcastConversationUpdates(conversationId);
+        }
+    }
+
+    @Transactional
+    public void markAsDelivered(UUID conversationId, UUID userId, Long lastDeliveredMessageId) {
+        getConversationOrThrow(conversationId);
+        ensureConversationMember(conversationId, userId);
+
+        Long resolvedLastDeliveredMessageId = resolveRequestedLastReadMessageId(
+                conversationId,
+                userId,
+                lastDeliveredMessageId
+        );
+
+        if (resolvedLastDeliveredMessageId == null) {
+            return;
+        }
+
+        if (isCursorUpdateThrottled(conversationId, userId, resolvedLastDeliveredMessageId, CursorType.DELIVERED)) {
+            return;
+        }
+
+        Instant now = Instant.now();
+        boolean cursorChanged = upsertConversationDeliveredCursor(
+                conversationId,
+                userId,
+                resolvedLastDeliveredMessageId,
+                now
+        );
+        if (!cursorChanged) {
+            return;
+        }
+
+        messagingTemplate.convertAndSend(
+                "/topic/conversations/" + conversationId,
+                RealtimeEvent.of(
+                        RealtimeEventType.MESSAGE_DELIVERY_UPDATED,
+                        new MessageDeliveryReceiptPayload(
+                                conversationId,
+                                userId,
+                                resolvedLastDeliveredMessageId,
+                                now
+                        )
+                )
+        );
     }
 
     @Transactional(readOnly = true)
@@ -947,7 +1055,20 @@ public class MessageService {
     }
 
     private void ensureConversationMember(UUID conversationId, UUID userId) {
-        getConversationMemberOrThrow(conversationId, userId);
+        if (!conversationMemberRepository.existsByConversationIdAndUserId(conversationId, userId)) {
+            Optional<ConversationMember> member = conversationMemberRepository
+                    .findByConversationIdAndUserId(conversationId, userId);
+            if (member != null && member.isPresent()) {
+                return;
+            }
+
+            List<ConversationMember> members = conversationMemberRepository.findByConversationId(conversationId);
+            boolean hasMembership = members != null
+                    && members.stream().anyMatch(item -> userId.equals(item.getUserId()));
+            if (!hasMembership) {
+                throw new ForbiddenException("User does not belong to this conversation");
+            }
+        }
     }
 
     private ConversationMember getConversationMemberOrThrow(UUID conversationId, UUID userId) {
@@ -1016,9 +1137,8 @@ public class MessageService {
         });
     }
 
-    private void broadcastConversationUpdatesForNewMessage(Conversation conversation, Message message) {
+    private void broadcastConversationUpdatesForNewMessage(Conversation conversation, Set<UUID> mentionedUserIds) {
         List<ConversationMember> members = conversationMemberRepository.findByConversationId(conversation.getId());
-        Set<UUID> mentionedUserIds = resolveMentionedUserIds(conversation, members, message.getContent());
 
         members.forEach(member -> {
             ConversationUserSetting setting = findConversationUserSetting(conversation.getId(), member.getUserId());
@@ -1175,13 +1295,14 @@ public class MessageService {
         return true;
     }
 
-    private void safeDispatchMessageNotifications(Conversation conversation, Message message) {
+    private void safeDispatchMessageNotifications(
+            Conversation conversation,
+            Message message,
+            Set<UUID> mentionedUserIds) {
         if (notificationDispatcher == null || notificationRecipientResolver == null || notificationContentBuilder == null) {
             return;
         }
         try {
-            List<ConversationMember> members = conversationMemberRepository.findByConversationId(conversation.getId());
-            Set<UUID> mentionedUserIds = resolveMentionedUserIds(conversation, members, message.getContent());
             List<ResolvedNotificationRecipient> recipients = notificationRecipientResolver
                     .resolveMessageRecipients(message, conversation, mentionedUserIds);
             if (recipients.isEmpty()) {
@@ -1262,39 +1383,85 @@ public class MessageService {
         }
     }
 
-    private Set<UUID> resolveMentionedUserIds(Conversation conversation, List<ConversationMember> members, String content) {
+    private Set<UUID> resolveMentionedUserIds(
+            Conversation conversation,
+            List<ConversationMember> members,
+            String content,
+            Collection<MessageMentionPayload> mentionPayloads) {
         if (conversation.getType() != ConversationType.GROUP) {
-            return Set.of();
-        }
-
-        Set<String> mentionedUsernames = extractMentionedUsernames(content);
-        if (mentionedUsernames.isEmpty()) {
             return Set.of();
         }
 
         Set<UUID> memberIds = members.stream()
                 .map(ConversationMember::getUserId)
                 .collect(Collectors.toSet());
+        if (memberIds.isEmpty()) {
+            return Set.of();
+        }
 
-        return userProfileRepository.findAllById(memberIds).stream()
-                .filter(profile -> !profile.isDeleted())
-                .filter(profile -> profile.getUsername() != null && !profile.getUsername().isBlank())
-                .filter(profile -> mentionedUsernames.contains(profile.getUsername().toLowerCase(Locale.ROOT)))
-                .map(UserProfile::getUserId)
-                .collect(Collectors.toSet());
+        Set<UUID> explicitlyMentionedUserIds = extractMentionedUserIdsFromPayload(mentionPayloads);
+        if (!explicitlyMentionedUserIds.isEmpty()) {
+            Set<UUID> invalidMentionedUserIds = explicitlyMentionedUserIds.stream()
+                    .filter(userId -> !memberIds.contains(userId))
+                    .collect(Collectors.toSet());
+            if (!invalidMentionedUserIds.isEmpty()) {
+                throw new BusinessException("Mention contains users outside this conversation");
+            }
+        }
+
+        Set<String> mentionedHandles = extractMentionedHandles(content);
+        Set<UUID> mentionedFromHandles = resolveMentionedMemberIdsByHandles(memberIds, mentionedHandles);
+
+        Set<UUID> resolvedMentionedUserIds = new LinkedHashSet<>();
+        resolvedMentionedUserIds.addAll(explicitlyMentionedUserIds);
+        resolvedMentionedUserIds.addAll(mentionedFromHandles);
+        return resolvedMentionedUserIds;
     }
 
-    private Set<String> extractMentionedUsernames(String content) {
+    private Set<UUID> extractMentionedUserIdsFromPayload(Collection<MessageMentionPayload> mentionPayloads) {
+        if (mentionPayloads == null || mentionPayloads.isEmpty()) {
+            return Set.of();
+        }
+
+        return mentionPayloads.stream()
+                .map(MessageMentionPayload::getUserId)
+                .filter(Objects::nonNull)
+                .collect(Collectors.toCollection(LinkedHashSet::new));
+    }
+
+    private Set<UUID> resolveMentionedMemberIdsByHandles(Set<UUID> memberIds, Set<String> mentionedHandles) {
+        if (memberIds.isEmpty() || mentionedHandles.isEmpty()) {
+            return Set.of();
+        }
+
+        Set<UUID> mentionedByUserIdToken = memberIds.stream()
+                .filter(userId -> mentionedHandles.contains(userId.toString().toLowerCase(Locale.ROOT)))
+                .collect(Collectors.toSet());
+
+        Set<UUID> mentionedByUsername = userProfileRepository.findAllById(memberIds).stream()
+                .filter(profile -> !profile.isDeleted())
+                .filter(profile -> profile.getUsername() != null && !profile.getUsername().isBlank())
+                .filter(profile -> mentionedHandles.contains(profile.getUsername().toLowerCase(Locale.ROOT)))
+                .map(UserProfile::getUserId)
+                .collect(Collectors.toSet());
+
+        Set<UUID> resolvedMentionedUserIds = new LinkedHashSet<>();
+        resolvedMentionedUserIds.addAll(mentionedByUserIdToken);
+        resolvedMentionedUserIds.addAll(mentionedByUsername);
+        return resolvedMentionedUserIds;
+    }
+
+    private Set<String> extractMentionedHandles(String content) {
         if (content == null || content.isBlank()) {
             return Set.of();
         }
 
         Matcher matcher = MENTION_PATTERN.matcher(content);
-        Set<String> usernames = new HashSet<>();
+        Set<String> handles = new HashSet<>();
         while (matcher.find()) {
-            usernames.add(matcher.group(1).toLowerCase(Locale.ROOT));
+            handles.add(matcher.group(1).toLowerCase(Locale.ROOT));
         }
-        return usernames;
+        return handles;
     }
 
     private String resolveDisplayName(Conversation conversation, ConversationUserSetting setting) {
@@ -1371,7 +1538,179 @@ public class MessageService {
 
     private Message resolveLatestVisibleMessage(UUID conversationId, UUID userId) {
         List<Message> latestMessages = messageRepository.findVisibleMessages(conversationId, userId, PageRequest.of(0, 1));
-        return latestMessages.isEmpty() ? null : latestMessages.get(0);
+        if (latestMessages == null || latestMessages.isEmpty()) {
+            return null;
+        }
+        return latestMessages.get(0);
+    }
+
+    private List<ConversationMemberReadStateResponse> buildConversationMemberReadStates(UUID conversationId) {
+        List<ConversationMemberReadState> readStates = conversationMemberReadStateRepository
+                .findActiveByConversationId(conversationId);
+        if (readStates == null) {
+            readStates = List.of();
+        }
+
+        return readStates.stream()
+                .filter(state -> state.getUserId() != null)
+                .map(state -> ConversationMemberReadStateResponse.builder()
+                        .conversationId(conversationId)
+                        .userId(state.getUserId())
+                        .lastDeliveredMessageId(state.getLastDeliveredMessageId())
+                        .deliveredAt(state.getLastDeliveredAt())
+                        .lastReadMessageId(state.getLastReadMessageId())
+                        .lastReadAt(state.getLastReadAt())
+                        .build())
+                .toList();
+    }
+
+    private Long resolveRequestedLastReadMessageId(UUID conversationId, UUID userId, Long requestedLastReadMessageId) {
+        if (requestedLastReadMessageId != null) {
+            Message readMessage = messageRepository.findByIdAndDeletedAtIsNull(requestedLastReadMessageId)
+                    .orElseThrow(() -> new NotFoundException("Message not found"));
+            if (!conversationId.equals(readMessage.getConversationId())) {
+                throw new BusinessException("Message does not belong to the requested conversation");
+            }
+            return readMessage.getId();
+        }
+
+        Message latestVisibleMessage = resolveLatestVisibleMessage(conversationId, userId);
+        return latestVisibleMessage != null ? latestVisibleMessage.getId() : null;
+    }
+
+    private boolean upsertConversationReadCursor(
+            UUID conversationId,
+            UUID userId,
+            Long lastReadMessageId,
+            Instant readAt) {
+        if (lastReadMessageId == null) {
+            return false;
+        }
+
+        Optional<ConversationMemberReadState> existingStateOptional = conversationMemberReadStateRepository
+                .findByConversationIdAndUserId(conversationId, userId);
+        if (existingStateOptional == null) {
+            existingStateOptional = Optional.empty();
+        }
+
+        ConversationMemberReadState readState = existingStateOptional.orElseGet(() -> {
+            ConversationMemberReadState state = new ConversationMemberReadState();
+            state.setConversationId(conversationId);
+            state.setUserId(userId);
+            return state;
+        });
+
+        Long existingLastReadMessageId = readState.getLastReadMessageId();
+        if (existingLastReadMessageId != null && existingLastReadMessageId >= lastReadMessageId) {
+            if (readState.getLastReadAt() == null || (readAt != null && readAt.isAfter(readState.getLastReadAt()))) {
+                readState.setLastReadAt(readAt);
+                conversationMemberReadStateRepository.save(readState);
+            }
+            return false;
+        }
+
+        readState.setLastReadMessageId(lastReadMessageId);
+        readState.setLastReadAt(readAt);
+        conversationMemberReadStateRepository.save(readState);
+        return true;
+    }
+
+    private boolean upsertConversationDeliveredCursor(
+            UUID conversationId,
+            UUID userId,
+            Long lastDeliveredMessageId,
+            Instant deliveredAt) {
+        if (lastDeliveredMessageId == null) {
+            return false;
+        }
+
+        Optional<ConversationMemberReadState> existingStateOptional = conversationMemberReadStateRepository
+                .findByConversationIdAndUserId(conversationId, userId);
+        if (existingStateOptional == null) {
+            existingStateOptional = Optional.empty();
+        }
+
+        ConversationMemberReadState readState = existingStateOptional.orElseGet(() -> {
+            ConversationMemberReadState state = new ConversationMemberReadState();
+            state.setConversationId(conversationId);
+            state.setUserId(userId);
+            return state;
+        });
+
+        Long existingLastDeliveredMessageId = readState.getLastDeliveredMessageId();
+        if (existingLastDeliveredMessageId != null && existingLastDeliveredMessageId >= lastDeliveredMessageId) {
+            if (readState.getLastDeliveredAt() == null
+                    || (deliveredAt != null && deliveredAt.isAfter(readState.getLastDeliveredAt()))) {
+                readState.setLastDeliveredAt(deliveredAt);
+                conversationMemberReadStateRepository.save(readState);
+            }
+            return false;
+        }
+
+        readState.setLastDeliveredMessageId(lastDeliveredMessageId);
+        readState.setLastDeliveredAt(deliveredAt);
+        conversationMemberReadStateRepository.save(readState);
+        return true;
+    }
+
+    private boolean isCursorUpdateThrottled(
+            UUID conversationId,
+            UUID userId,
+            Long requestedCursor,
+            CursorType cursorType) {
+        if (requestedCursor == null) {
+            return false;
+        }
+
+        long throttleWindowMs = Math.max(
+                0L,
+                cursorType == CursorType.READ ? seenCursorThrottleMs : deliveredCursorThrottleMs
+        );
+        if (throttleWindowMs <= 0L) {
+            return false;
+        }
+
+        String throttleKey = buildCursorThrottleKey(conversationId, userId, cursorType);
+        CursorThrottleState throttleState = cursorThrottleStateByKey.computeIfAbsent(
+                throttleKey,
+                key -> new CursorThrottleState()
+        );
+
+        long nowMs = System.currentTimeMillis();
+        synchronized (throttleState) {
+            long effectiveWindowMs = throttleWindowMs > 0L
+                    ? throttleWindowMs
+                    : DEFAULT_CURSOR_THROTTLE_MS;
+
+            boolean cursorNotAdvanced = throttleState.lastCursor != null
+                    && throttleState.lastCursor >= requestedCursor;
+            boolean insideWindow = throttleState.lastUpdatedAtMs > 0L
+                    && (nowMs - throttleState.lastUpdatedAtMs) < effectiveWindowMs;
+
+            if (cursorNotAdvanced && insideWindow) {
+                return true;
+            }
+
+            if (throttleState.lastCursor == null || requestedCursor > throttleState.lastCursor) {
+                throttleState.lastCursor = requestedCursor;
+            }
+            throttleState.lastUpdatedAtMs = nowMs;
+            return false;
+        }
+    }
+
+    private String buildCursorThrottleKey(UUID conversationId, UUID userId, CursorType cursorType) {
+        return cursorType.name() + ":" + conversationId + ":" + userId;
+    }
+
+    private enum CursorType {
+        READ,
+        DELIVERED
+    }
+
+    private static final class CursorThrottleState {
+        private Long lastCursor;
+        private long lastUpdatedAtMs;
     }
 
     private String encodeCursor(Message message) {
