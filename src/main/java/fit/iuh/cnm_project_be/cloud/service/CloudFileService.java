@@ -1,8 +1,11 @@
 package fit.iuh.cnm_project_be.cloud.service;
 
 import fit.iuh.cnm_project_be.cloud.dto.request.CreateCloudFolderRequest;
+import fit.iuh.cnm_project_be.cloud.dto.request.CreateCloudLinkRequest;
+import fit.iuh.cnm_project_be.cloud.dto.request.CreateCloudManualItemRequest;
 import fit.iuh.cnm_project_be.cloud.dto.request.RenameCloudFileRequest;
 import fit.iuh.cnm_project_be.cloud.dto.request.SendCloudFileToConversationRequest;
+import fit.iuh.cnm_project_be.cloud.dto.response.CloudFileAnalysisResponse;
 import fit.iuh.cnm_project_be.cloud.dto.response.CloudFilePageResponse;
 import fit.iuh.cnm_project_be.cloud.dto.response.CloudFileResponse;
 import fit.iuh.cnm_project_be.cloud.dto.response.CloudStorageSummaryResponse;
@@ -181,6 +184,59 @@ public class CloudFileService {
     }
 
     @Transactional
+    public CloudFileResponse createLink(CreateCloudLinkRequest request) {
+        UUID currentUserId = userService.getCurrentUserId();
+        UUID parentFolderId = request.getParentFolderId();
+        validateParentFolder(currentUserId, parentFolderId);
+
+        CloudFile link = new CloudFile();
+        link.setOwnerId(currentUserId);
+        link.setParentFolderId(parentFolderId);
+        link.setName(normalizeName(request.getName()));
+        link.setOriginalFileName(null);
+        link.setMimeType("text/uri-list");
+        link.setFileExtension(null);
+        link.setFileSize(0L);
+        link.setFileType(CloudFileType.LINK);
+        link.setFileUrl(normalizeUrl(request.getUrl()));
+        link.setStorageKey(null);
+        link.setFolder(false);
+        link.setDurationMs(null);
+        link.setWaveform(null);
+        link.setAudioFormat(null);
+        link.setManualContent(null);
+
+        return toResponse(cloudFileRepository.save(link));
+    }
+
+    @Transactional
+    public CloudFileResponse createManualItem(CreateCloudManualItemRequest request) {
+        UUID currentUserId = userService.getCurrentUserId();
+        UUID parentFolderId = request.getParentFolderId();
+        validateParentFolder(currentUserId, parentFolderId);
+
+        String content = normalizeNullableText(request.getContent());
+        CloudFile manualItem = new CloudFile();
+        manualItem.setOwnerId(currentUserId);
+        manualItem.setParentFolderId(parentFolderId);
+        manualItem.setName(normalizeName(request.getName()));
+        manualItem.setOriginalFileName(null);
+        manualItem.setMimeType("text/plain");
+        manualItem.setFileExtension("txt");
+        manualItem.setFileSize(content != null ? (long) content.length() : 0L);
+        manualItem.setFileType(CloudFileType.MANUAL);
+        manualItem.setFileUrl(null);
+        manualItem.setStorageKey(null);
+        manualItem.setFolder(false);
+        manualItem.setDurationMs(null);
+        manualItem.setWaveform(null);
+        manualItem.setAudioFormat(null);
+        manualItem.setManualContent(content);
+
+        return toResponse(cloudFileRepository.save(manualItem));
+    }
+
+    @Transactional
     public CloudFileResponse rename(UUID fileId, RenameCloudFileRequest request) {
         UUID currentUserId = userService.getCurrentUserId();
         CloudFile file = getOwnedActiveFile(currentUserId, fileId);
@@ -259,6 +315,27 @@ public class CloudFileService {
     }
 
     @Transactional(readOnly = true)
+    public CloudFileAnalysisResponse getFileAnalysis(UUID fileId) {
+        UUID currentUserId = userService.getCurrentUserId();
+        CloudFile cloudFile = getOwnedActiveFile(currentUserId, fileId);
+        ensureImageAnalysisTarget(cloudFile);
+        return buildAnalysisResponse(cloudFile);
+    }
+
+    @Transactional
+    public CloudFileAnalysisResponse runFileAnalysis(UUID fileId) {
+        UUID currentUserId = userService.getCurrentUserId();
+        CloudFile cloudFile = getOwnedActiveFile(currentUserId, fileId);
+        ensureImageAnalysisTarget(cloudFile);
+        cloudFile.setAnalysisStatus("Trạng thái phân tích: Phát hiện bệnh");
+        cloudFile.setDetectedDisease("rust");
+        cloudFile.setSeverityLevel("Cao");
+        cloudFile.setAnalysisConfidence(0.92D);
+        cloudFile.setAnalyzedAt(Instant.now());
+        return buildAnalysisResponse(cloudFileRepository.save(cloudFile));
+    }
+
+    @Transactional(readOnly = true)
     public CloudStorageSummaryResponse getSummary() {
         UUID currentUserId = userService.getCurrentUserId();
 
@@ -268,6 +345,8 @@ public class CloudFileService {
         byType.put(CloudFileType.AUDIO.name(), 0L);
         byType.put(CloudFileType.DOCUMENT.name(), 0L);
         byType.put(CloudFileType.ARCHIVE.name(), 0L);
+        byType.put(CloudFileType.LINK.name(), 0L);
+        byType.put(CloudFileType.MANUAL.name(), 0L);
         byType.put(CloudFileType.OTHER.name(), 0L);
 
         cloudFileRepository.summarizeStorageByType(currentUserId).forEach(summary -> {
@@ -311,6 +390,7 @@ public class CloudFileService {
                 .fileType(cloudFile.getFileType() != null ? cloudFile.getFileType().name() : null)
                 .fileUrl(cloudFile.getFileUrl())
                 .storageKey(cloudFile.getStorageKey())
+                .manualContent(cloudFile.getManualContent())
                 .isFolder(cloudFile.isFolder())
                 .deletedAt(cloudFile.getDeletedAt())
                 .createdAt(cloudFile.getCreatedAt())
@@ -390,6 +470,21 @@ public class CloudFileService {
         return normalizedName;
     }
 
+    private String normalizeUrl(String url) {
+        String normalizedUrl = trimToNull(url);
+        if (normalizedUrl == null) {
+            throw new BusinessException("URL is required");
+        }
+        String lowerCaseUrl = normalizedUrl.toLowerCase(Locale.ROOT);
+        if (!lowerCaseUrl.startsWith("http://") && !lowerCaseUrl.startsWith("https://")) {
+            throw new BusinessException("URL must start with http:// or https://");
+        }
+        if (normalizedUrl.length() > 2000) {
+            throw new BusinessException("URL must be at most 2000 characters");
+        }
+        return normalizedUrl;
+    }
+
     private String sanitizeUploadedFileName(String originalFileName) {
         String normalizedName = originalFileName == null || originalFileName.isBlank()
                 ? "upload.bin"
@@ -464,6 +559,37 @@ public class CloudFileService {
             case AUDIO -> MessageType.AUDIO;
             default -> MessageType.FILE;
         };
+    }
+
+    private void ensureImageAnalysisTarget(CloudFile cloudFile) {
+        if (cloudFile.isFolder() || cloudFile.getFileType() != CloudFileType.IMAGE) {
+            throw new BusinessException("Only image files can be analyzed");
+        }
+    }
+
+    private CloudFileAnalysisResponse buildAnalysisResponse(CloudFile cloudFile) {
+        boolean analyzed = cloudFile.getAnalyzedAt() != null;
+        Map<String, Object> rawAnalysis = analyzed
+                ? Map.of(
+                "disease", cloudFile.getDetectedDisease(),
+                "severity", cloudFile.getSeverityLevel(),
+                "confidence", cloudFile.getAnalysisConfidence())
+                : Map.of();
+
+        return CloudFileAnalysisResponse.builder()
+                .fileId(cloudFile.getId())
+                .mediaUrl(cloudFile.getFileUrl())
+                .timeCaptured(cloudFile.getCreatedAt())
+                .uploadStatus("Đã tải lên")
+                .fileSizeLabel("640x480 - " + defaultLong(cloudFile.getFileSize()) + " bytes")
+                .transmissionStatus("Đã gửi")
+                .analysisStatus(analyzed ? cloudFile.getAnalysisStatus() : "Chưa phân tích")
+                .detectedDisease(cloudFile.getDetectedDisease())
+                .severityLevel(cloudFile.getSeverityLevel())
+                .rawAnalysis(rawAnalysis)
+                .createdAt(cloudFile.getCreatedAt())
+                .updatedAt(cloudFile.getAnalyzedAt() != null ? cloudFile.getAnalyzedAt() : cloudFile.getUpdatedAt())
+                .build();
     }
 
     private List<Double> deserializeWaveform(String waveformJson) {

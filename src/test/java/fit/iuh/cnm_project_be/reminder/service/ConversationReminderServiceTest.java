@@ -6,6 +6,7 @@ import fit.iuh.cnm_project_be.notification.dto.NotificationDispatchRequest;
 import fit.iuh.cnm_project_be.notification.dto.NotificationDispatchResult;
 import fit.iuh.cnm_project_be.notification.enums.NotificationType;
 import fit.iuh.cnm_project_be.notification.service.NotificationDispatcher;
+import fit.iuh.cnm_project_be.message.service.MessageService;
 import fit.iuh.cnm_project_be.reminder.dto.request.CreateConversationReminderRequest;
 import fit.iuh.cnm_project_be.reminder.dto.response.ConversationReminderResponse;
 import fit.iuh.cnm_project_be.reminder.entity.ConversationReminder;
@@ -63,6 +64,8 @@ class ConversationReminderServiceTest {
     private UserProfileRepository userProfileRepository;
     @Mock
     private NotificationDispatcher notificationDispatcher;
+    @Mock
+    private MessageService messageService;
 
     @InjectMocks
     private ConversationReminderService reminderService;

@@ -7,6 +7,7 @@ import fit.iuh.cnm_project_be.notification.dto.NotificationDispatchRequest;
 import fit.iuh.cnm_project_be.notification.enums.NotificationTargetType;
 import fit.iuh.cnm_project_be.notification.enums.NotificationType;
 import fit.iuh.cnm_project_be.notification.service.NotificationDispatcher;
+import fit.iuh.cnm_project_be.message.service.MessageService;
 import fit.iuh.cnm_project_be.reminder.dto.request.CreateConversationReminderRequest;
 import fit.iuh.cnm_project_be.reminder.dto.request.UpdateConversationReminderRequest;
 import fit.iuh.cnm_project_be.reminder.dto.response.ConversationReminderResponse;
@@ -64,6 +65,7 @@ public class ConversationReminderService {
     private final ConversationMemberRepository conversationMemberRepository;
     private final UserProfileRepository userProfileRepository;
     private final NotificationDispatcher notificationDispatcher;
+    private final MessageService messageService;
 
     @Transactional
     public ConversationReminderResponse createReminder(
@@ -93,6 +95,7 @@ public class ConversationReminderService {
 
         ConversationReminder savedReminder = reminderRepository.save(reminder);
         replaceParticipants(savedReminder.getId(), participantIds);
+        publishReminderSystemMessage(savedReminder, actorUserId, "tạo nhắc hẹn");
         return mapReminderResponse(savedReminder, conversation, participantRepository.findByReminderId(savedReminder.getId()));
     }
 
@@ -178,6 +181,7 @@ public class ConversationReminderService {
         }
 
         Conversation conversation = getConversationOrThrow(savedReminder.getConversationId());
+        publishReminderSystemMessage(savedReminder, actorUserId, "cập nhật nhắc hẹn");
         return mapReminderResponse(
                 savedReminder,
                 conversation,
@@ -186,6 +190,10 @@ public class ConversationReminderService {
 
     @Transactional
     public ConversationReminderResponse cancelReminder(UUID reminderId, UUID actorUserId) {
+        return cancelReminderInternal(reminderId, actorUserId, "hủy nhắc hẹn");
+    }
+
+    private ConversationReminderResponse cancelReminderInternal(UUID reminderId, UUID actorUserId, String actionText) {
         ConversationReminder reminder = getReminderOrThrow(reminderId);
         ensureCreator(reminder, actorUserId);
         if (reminder.getStatus() == ReminderStatus.CANCELLED) {
@@ -195,12 +203,13 @@ public class ConversationReminderService {
         reminder.setStatus(ReminderStatus.CANCELLED);
         reminder.setCancelledAt(Instant.now());
         ConversationReminder savedReminder = reminderRepository.save(reminder);
+        publishReminderSystemMessage(savedReminder, actorUserId, actionText);
         return mapReminderResponse(savedReminder);
     }
 
     @Transactional
     public ConversationReminderResponse deleteReminder(UUID reminderId, UUID actorUserId) {
-        return cancelReminder(reminderId, actorUserId);
+        return cancelReminderInternal(reminderId, actorUserId, "xóa nhắc hẹn");
     }
 
     @Transactional
@@ -462,6 +471,18 @@ public class ConversationReminderService {
                 })
                 .toList();
         participantRepository.saveAll(participants);
+    }
+
+    private void publishReminderSystemMessage(ConversationReminder reminder, UUID actorUserId, String actionText) {
+        String actorName = userProfileRepository.findById(actorUserId)
+                .filter(profile -> !profile.isDeleted())
+                .map(this::resolveUserDisplayName)
+                .orElse("Ai đó");
+        String reminderTitle = defaultIfBlank(reminder.getTitle(), "nhắc hẹn");
+        messageService.createSystemMessage(
+                reminder.getConversationId(),
+                actorUserId,
+                actorName + " " + actionText + " " + reminderTitle);
     }
 
     private Set<UUID> resolveParticipantIds(
