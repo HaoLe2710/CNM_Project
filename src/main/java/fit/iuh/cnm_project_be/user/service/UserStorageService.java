@@ -2,15 +2,23 @@ package fit.iuh.cnm_project_be.user.service;
 
 import fit.iuh.cnm_project_be.message.entity.MessageAttachment;
 import fit.iuh.cnm_project_be.message.repository.MessageAttachmentRepository;
+import fit.iuh.cnm_project_be.message.repository.MessageRepository;
+import fit.iuh.cnm_project_be.room.entity.Conversation;
+import fit.iuh.cnm_project_be.room.repository.ConversationRepository;
 import fit.iuh.cnm_project_be.user.dto.response.UserStorageCleanupResponse;
 import fit.iuh.cnm_project_be.user.dto.response.UserStorageFileItemResponse;
 import fit.iuh.cnm_project_be.user.dto.response.UserStorageSummaryResponse;
 import lombok.RequiredArgsConstructor;
+import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
+import java.util.Locale;
+import java.util.Map;
+import java.util.function.Function;
+import java.util.stream.Collectors;
 import java.util.UUID;
 
 @Service
@@ -21,6 +29,8 @@ public class UserStorageService {
 
     private final UserService userService;
     private final MessageAttachmentRepository messageAttachmentRepository;
+    private final MessageRepository messageRepository;
+    private final ConversationRepository conversationRepository;
 
     @Transactional(readOnly = true)
     public UserStorageSummaryResponse getSummary() {
@@ -48,6 +58,33 @@ public class UserStorageService {
         return getLargeFiles(userService.getCurrentUserId(), limit);
     }
 
+    @Transactional(readOnly = true)
+    public Page<UserStorageFileItemResponse> getSentMedia(String scope, int page, int size) {
+        UUID userId = userService.getCurrentUserId();
+        String normalizedScope = normalizeScope(scope);
+        PageRequest pageRequest = PageRequest.of(Math.max(0, page), Math.min(Math.max(1, size), 100));
+        Page<MessageAttachment> attachmentPage = messageAttachmentRepository.findSentMediaBySenderIdAndScope(
+                userId,
+                normalizedScope,
+                pageRequest);
+
+        Map<Long, fit.iuh.cnm_project_be.message.entity.Message> messagesById = messageRepository.findAllById(
+                        attachmentPage.getContent().stream().map(MessageAttachment::getMessageId).toList())
+                .stream()
+                .collect(Collectors.toMap(fit.iuh.cnm_project_be.message.entity.Message::getId, Function.identity()));
+
+        Map<UUID, Conversation> conversationsById = conversationRepository.findAllById(
+                        messagesById.values().stream().map(fit.iuh.cnm_project_be.message.entity.Message::getConversationId).toList())
+                .stream()
+                .collect(Collectors.toMap(Conversation::getId, Function.identity()));
+
+        return attachmentPage.map(attachment -> {
+            fit.iuh.cnm_project_be.message.entity.Message message = messagesById.get(attachment.getMessageId());
+            Conversation conversation = message == null ? null : conversationsById.get(message.getConversationId());
+            return toFileItem(attachment, message, conversation);
+        });
+    }
+
     public UserStorageCleanupResponse cleanupCache() {
         return cleanupResponse("cache");
     }
@@ -68,9 +105,20 @@ public class UserStorageService {
     }
 
     private UserStorageFileItemResponse toFileItem(MessageAttachment attachment) {
+        return toFileItem(attachment, null, null);
+    }
+
+    private UserStorageFileItemResponse toFileItem(
+            MessageAttachment attachment,
+            fit.iuh.cnm_project_be.message.entity.Message message,
+            Conversation conversation) {
         long sizeBytes = defaultLong(attachment.getFileSize());
         return UserStorageFileItemResponse.builder()
                 .id(attachment.getId())
+                .messageId(attachment.getMessageId())
+                .conversationId(message == null ? null : message.getConversationId())
+                .conversationName(conversation == null ? null : conversation.getName())
+                .fileUrl(attachment.getFileUrl())
                 .thumbnailUrl(attachment.getFileUrl())
                 .name(attachment.getOriginalFileName())
                 .sizeBytes(sizeBytes)
@@ -78,6 +126,17 @@ public class UserStorageService {
                 .type(attachment.getAttachmentType() == null ? "FILE" : attachment.getAttachmentType().name())
                 .createdAt(attachment.getCreatedAt())
                 .build();
+    }
+
+    private String normalizeScope(String scope) {
+        if (scope == null || scope.isBlank()) {
+            return "ALL";
+        }
+        String normalizedScope = scope.trim().toUpperCase(Locale.ROOT);
+        if (!List.of("ALL", "GROUP", "PRIVATE").contains(normalizedScope)) {
+            return "ALL";
+        }
+        return normalizedScope;
     }
 
     private UserStorageCleanupResponse cleanupResponse(String target) {

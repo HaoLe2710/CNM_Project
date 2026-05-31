@@ -4,6 +4,7 @@ package fit.iuh.cnm_project_be.user.controller;
 import fit.iuh.cnm_project_be.common.api.ApiResponse;
 import fit.iuh.cnm_project_be.user.dto.request.SendFriendRequestRequest;
 import fit.iuh.cnm_project_be.user.dto.request.UpdateFriendshipSettingRequest;
+import fit.iuh.cnm_project_be.user.dto.response.FriendBirthdayResponse;
 import fit.iuh.cnm_project_be.user.dto.response.FriendRequestResponse;
 import fit.iuh.cnm_project_be.user.dto.response.FriendshipResponse;
 import fit.iuh.cnm_project_be.user.dto.response.FriendshipSettingResponse;
@@ -35,6 +36,14 @@ public class FriendController {
     @GetMapping("/close")
     public ApiResponse<List<FriendshipResponse>> getCloseFriends() {
         return ApiResponse.ok(friendshipSettingService.listMyCloseFriends(), UUID.randomUUID().toString());
+    }
+
+    @GetMapping("/birthdays")
+    public ApiResponse<List<FriendBirthdayResponse>> getUpcomingBirthdays(
+            @RequestParam(defaultValue = "30") Integer upcomingDays) {
+        return ApiResponse.ok(
+                friendService.getUpcomingBirthdays(upcomingDays == null ? 30 : upcomingDays),
+                UUID.randomUUID().toString());
     }
 
     @GetMapping("/settings")

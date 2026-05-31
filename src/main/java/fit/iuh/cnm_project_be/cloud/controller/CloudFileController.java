@@ -1,8 +1,11 @@
 package fit.iuh.cnm_project_be.cloud.controller;
 
 import fit.iuh.cnm_project_be.cloud.dto.request.CreateCloudFolderRequest;
+import fit.iuh.cnm_project_be.cloud.dto.request.CreateCloudLinkRequest;
+import fit.iuh.cnm_project_be.cloud.dto.request.CreateCloudManualItemRequest;
 import fit.iuh.cnm_project_be.cloud.dto.request.RenameCloudFileRequest;
 import fit.iuh.cnm_project_be.cloud.dto.request.SendCloudFileToConversationRequest;
+import fit.iuh.cnm_project_be.cloud.dto.response.CloudFileAnalysisResponse;
 import fit.iuh.cnm_project_be.cloud.dto.response.CloudFilePageResponse;
 import fit.iuh.cnm_project_be.cloud.dto.response.CloudFileResponse;
 import fit.iuh.cnm_project_be.cloud.dto.response.CloudStorageSummaryResponse;
@@ -73,6 +76,22 @@ public class CloudFileController {
                 UUID.randomUUID().toString());
     }
 
+    @PostMapping("/links")
+    public ApiResponse<CloudFileResponse> createLink(
+            @Valid @RequestBody CreateCloudLinkRequest request) {
+        return ApiResponse.ok(
+                cloudFileService.createLink(request),
+                UUID.randomUUID().toString());
+    }
+
+    @PostMapping("/manual-items")
+    public ApiResponse<CloudFileResponse> createManualItem(
+            @Valid @RequestBody CreateCloudManualItemRequest request) {
+        return ApiResponse.ok(
+                cloudFileService.createManualItem(request),
+                UUID.randomUUID().toString());
+    }
+
     @PatchMapping("/files/{fileId}")
     public ApiResponse<CloudFileResponse> renameFile(
             @PathVariable UUID fileId,
@@ -107,6 +126,20 @@ public class CloudFileController {
             @Valid @RequestBody SendCloudFileToConversationRequest request) {
         return ApiResponse.ok(
                 cloudFileService.sendFileToConversation(fileId, request),
+                UUID.randomUUID().toString());
+    }
+
+    @GetMapping("/files/{fileId}/analysis")
+    public ApiResponse<CloudFileAnalysisResponse> getFileAnalysis(@PathVariable UUID fileId) {
+        return ApiResponse.ok(
+                cloudFileService.getFileAnalysis(fileId),
+                UUID.randomUUID().toString());
+    }
+
+    @PostMapping("/files/{fileId}/analysis/run")
+    public ApiResponse<CloudFileAnalysisResponse> runFileAnalysis(@PathVariable UUID fileId) {
+        return ApiResponse.ok(
+                cloudFileService.runFileAnalysis(fileId),
                 UUID.randomUUID().toString());
     }
 

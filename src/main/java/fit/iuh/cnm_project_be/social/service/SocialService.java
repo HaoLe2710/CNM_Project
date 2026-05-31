@@ -367,6 +367,42 @@ public class SocialService {
         return toMomentResponse(momentRepository.save(moment));
     }
 
+    @Transactional
+    public MomentResponse createMoment(
+            MultipartFile file,
+            String caption,
+            String coverUrl,
+            Integer durationSeconds,
+            MomentVisibilityMode visibilityMode,
+            MomentAudioMode audioMode,
+            String musicTrackId,
+            String musicTitle,
+            String musicArtist,
+            String musicUrl,
+            Integer musicStartSeconds) {
+        UUID currentUserId = currentUser().getUserId();
+        if (file == null || file.isEmpty()) {
+            throw new BusinessException("Story media file is required");
+        }
+
+        UploadAttachmentResponse upload = s3MediaStorageService.upload(currentUserId, file);
+        CreateMomentRequest request = new CreateMomentRequest();
+        request.setMediaUrl(upload.getUrl());
+        request.setMediaType(toMediaType(upload.getType()));
+        request.setCaption(caption);
+        request.setCoverUrl(coverUrl);
+        request.setDurationSeconds(durationSeconds);
+        request.setVisibilityMode(visibilityMode);
+        request.setAudioMode(audioMode);
+        request.setMusicTrackId(musicTrackId);
+        request.setMusicTitle(musicTitle);
+        request.setMusicArtist(musicArtist);
+        request.setMusicUrl(musicUrl);
+        request.setMusicStartSeconds(musicStartSeconds);
+
+        return createMoment(request);
+    }
+
     @Transactional(readOnly = true)
     public List<MomentResponse> getMyMoments(Integer size) {
         UUID currentUserId = currentUser().getUserId();

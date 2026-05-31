@@ -11,6 +11,8 @@ public enum CloudFileType {
     AUDIO,
     DOCUMENT,
     ARCHIVE,
+    LINK,
+    MANUAL,
     OTHER;
 
     private static final Set<String> DOCUMENT_MIME_TYPES = Set.of(

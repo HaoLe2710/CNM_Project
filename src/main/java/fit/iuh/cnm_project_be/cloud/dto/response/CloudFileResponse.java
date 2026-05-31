@@ -20,6 +20,7 @@ public class CloudFileResponse {
     private String fileType;
     private String fileUrl;
     private String storageKey;
+    private String manualContent;
     @JsonProperty("isFolder")
     private boolean isFolder;
     private Instant deletedAt;

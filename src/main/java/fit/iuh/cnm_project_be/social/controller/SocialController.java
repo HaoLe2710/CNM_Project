@@ -13,6 +13,8 @@ import fit.iuh.cnm_project_be.social.dto.response.PostCommentResponse;
 import fit.iuh.cnm_project_be.social.dto.response.PostInteractionResponse;
 import fit.iuh.cnm_project_be.social.dto.response.PostResponse;
 import fit.iuh.cnm_project_be.social.dto.response.SocialMediaUploadResponse;
+import fit.iuh.cnm_project_be.social.enums.MomentAudioMode;
+import fit.iuh.cnm_project_be.social.enums.MomentVisibilityMode;
 import fit.iuh.cnm_project_be.social.enums.PostVisibilityMode;
 import fit.iuh.cnm_project_be.social.service.SocialService;
 import jakarta.validation.Valid;
@@ -31,6 +33,7 @@ import org.springframework.web.bind.annotation.RequestPart;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.multipart.MultipartFile;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 
@@ -61,15 +64,15 @@ public class SocialController {
     @PostMapping(value = "/posts/upload", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public ApiResponse<PostResponse> createPostWithUpload(
             @RequestPart(value = "files", required = false) MultipartFile[] files,
-            @RequestPart(value = "file", required = false) MultipartFile file,
+            @RequestPart(value = "files[]", required = false) MultipartFile[] bracketFiles,
+            @RequestPart(value = "file", required = false) MultipartFile[] file,
+            @RequestPart(value = "mediaFiles", required = false) MultipartFile[] mediaFiles,
+            @RequestPart(value = "mediaFiles[]", required = false) MultipartFile[] bracketMediaFiles,
             @RequestParam(required = false) String caption,
             @RequestParam(defaultValue = "ALL_FRIENDS") PostVisibilityMode visibilityMode,
             @RequestParam(required = false) List<UUID> allowedViewerIds,
             @RequestParam(required = false) List<UUID> taggedFriendIds) {
-        MultipartFile[] resolvedFiles = files;
-        if ((resolvedFiles == null || resolvedFiles.length == 0) && file != null && !file.isEmpty()) {
-            resolvedFiles = new MultipartFile[]{file};
-        }
+        MultipartFile[] resolvedFiles = resolveMultipartFiles(files, bracketFiles, file, mediaFiles, bracketMediaFiles);
         return ApiResponse.ok(
                 socialService.createPost(resolvedFiles, caption, visibilityMode, allowedViewerIds, taggedFriendIds),
                 UUID.randomUUID().toString()
@@ -146,6 +149,35 @@ public class SocialController {
         return ApiResponse.ok(socialService.createMoment(request), UUID.randomUUID().toString());
     }
 
+    @PostMapping(value = "/moments/upload", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    public ApiResponse<MomentResponse> createMomentWithUpload(
+            @RequestPart("file") MultipartFile file,
+            @RequestParam(required = false) String caption,
+            @RequestParam(required = false) String coverUrl,
+            @RequestParam(required = false) Integer durationSeconds,
+            @RequestParam(required = false) MomentVisibilityMode visibilityMode,
+            @RequestParam(required = false) MomentAudioMode audioMode,
+            @RequestParam(required = false) String musicTrackId,
+            @RequestParam(required = false) String musicTitle,
+            @RequestParam(required = false) String musicArtist,
+            @RequestParam(required = false) String musicUrl,
+            @RequestParam(required = false) Integer musicStartSeconds) {
+        return ApiResponse.ok(
+                socialService.createMoment(
+                        file,
+                        caption,
+                        coverUrl,
+                        durationSeconds,
+                        visibilityMode,
+                        audioMode,
+                        musicTrackId,
+                        musicTitle,
+                        musicArtist,
+                        musicUrl,
+                        musicStartSeconds),
+                UUID.randomUUID().toString());
+    }
+
     @GetMapping("/moments/me")
     public ApiResponse<List<MomentResponse>> getMyMoments(@RequestParam(required = false) Integer size) {
         return ApiResponse.ok(socialService.getMyMoments(size), UUID.randomUUID().toString());
@@ -205,5 +237,20 @@ public class SocialController {
     @PostMapping(value = "/media/upload", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public ApiResponse<SocialMediaUploadResponse> uploadMedia(@RequestParam("file") MultipartFile file) {
         return ApiResponse.ok(socialService.uploadMedia(file), UUID.randomUUID().toString());
+    }
+
+    private MultipartFile[] resolveMultipartFiles(MultipartFile[]... candidates) {
+        List<MultipartFile> resolved = new ArrayList<>();
+        for (MultipartFile[] candidate : candidates) {
+            if (candidate == null) {
+                continue;
+            }
+            for (MultipartFile item : candidate) {
+                if (item != null && !item.isEmpty()) {
+                    resolved.add(item);
+                }
+            }
+        }
+        return resolved.toArray(MultipartFile[]::new);
     }
 }
