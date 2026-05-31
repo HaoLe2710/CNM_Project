@@ -248,6 +248,25 @@ public class UserSettingService {
         defaults.put("personal", mapOf(
                 "saveMediaFromZalo", true
         ));
+        defaults.put("zstyle", mapOf(
+                "enabled", false,
+                "themeId", null,
+                "themeName", "Mặc định",
+                "backgroundUrl", null,
+                "accentColor", "#0068ff"
+        ));
+        defaults.put("ringback", mapOf(
+                "enabled", false,
+                "toneId", null,
+                "toneName", null,
+                "artist", null,
+                "previewUrl", null
+        ));
+        defaults.put("wallet", mapOf(
+                "enabled", false,
+                "provider", "ZALOPAY",
+                "linked", false
+        ));
         defaults.put("privacy", mapOf(
                 "blockActivity", false,
                 "showOnlineStatus", true,

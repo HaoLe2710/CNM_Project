@@ -322,6 +322,10 @@ public class MessageService {
 
         messagingTemplate.convertAndSend("/topic/conversations/" + savedMessage.getConversationId(),
                 RealtimeEvent.of(RealtimeEventType.MESSAGE_UPDATED, response));
+        createSystemMessage(
+                savedMessage.getConversationId(),
+                actorId,
+                buildPinSystemMessageContent(savedMessage, actorId, pinned));
 
         return response;
     }
@@ -564,6 +568,35 @@ public class MessageService {
                 .isTyping(isTyping)
                 .displayName(displayName)
                 .build();
+    }
+
+    @Transactional
+    public MessageResponse createSystemMessage(UUID conversationId, UUID actorUserId, String content) {
+        getConversationOrThrow(conversationId);
+        ensureConversationMember(conversationId, actorUserId);
+
+        String normalizedContent = normalizeNullableText(content);
+        if (normalizedContent == null) {
+            throw new BusinessException("System message content is required");
+        }
+
+        Message message = new Message();
+        message.setConversationId(conversationId);
+        message.setSenderId(actorUserId);
+        message.setContent(normalizedContent);
+        message.setMessageType(MessageType.SYSTEM);
+
+        Message savedMessage = messageRepository.save(message);
+        initializeStatuses(savedMessage.getId(), conversationId);
+        initializeUserStates(savedMessage.getId(), conversationId, actorUserId);
+
+        MessageUserState actorState = messageUserStateRepository.findByMessageIdAndUserId(savedMessage.getId(), actorUserId)
+                .orElse(null);
+        MessageResponse response = mapToResponse(savedMessage, actorUserId, List.of(), List.of(), actorState);
+        messagingTemplate.convertAndSend("/topic/conversations/" + conversationId,
+                RealtimeEvent.of(RealtimeEventType.MESSAGE_CREATED, response));
+        broadcastConversationUpdates(conversationId);
+        return response;
     }
 
     private String resolveUserDisplayName(UserProfile userProfile) {
@@ -888,6 +921,16 @@ public class MessageService {
 
         String trimmed = source.trim();
         return trimmed.length() <= 80 ? trimmed : trimmed.substring(0, 77) + "...";
+    }
+
+    private String buildPinSystemMessageContent(Message message, UUID actorId, boolean pinned) {
+        String actorName = userProfileRepository.findById(actorId)
+                .filter(profile -> !profile.isDeleted())
+                .map(this::resolveUserDisplayName)
+                .orElse("Ai đó");
+        String preview = buildContentPreview(message.getContent(), message.getOriginalLinkUrl());
+        String target = preview.isBlank() ? "1 tin nhắn" : "1 tin nhắn " + preview;
+        return actorName + (pinned ? " đã ghim " : " bỏ ghim ") + target;
     }
 
     private void saveAttachments(Long messageId, List<MessageAttachmentPayload> attachments) {
@@ -1216,7 +1259,7 @@ public class MessageService {
     private String resolveGroupSystemPreviewText(String content) {
         String normalized = content == null ? "" : content.trim();
         if (!normalized.startsWith(GROUP_SYSTEM_PREFIX)) {
-            return "Hoạt động nhóm";
+            return normalized.isBlank() ? "Hoạt động nhóm" : normalized;
         }
 
         String kind = extractGroupSystemJsonField(normalized, "kind");

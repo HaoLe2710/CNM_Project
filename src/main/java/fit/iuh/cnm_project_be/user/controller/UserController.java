@@ -20,6 +20,7 @@ import jakarta.validation.Valid;
 import lombok.AccessLevel;
 import lombok.AllArgsConstructor;
 import lombok.experimental.FieldDefaults;
+import org.springframework.data.domain.Page;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
@@ -130,6 +131,20 @@ public class UserController {
             @RequestParam(defaultValue = "20") Integer limit
     ) {
         return ApiResponse.ok(userStorageService.getLargeFiles(limit == null ? 20 : limit), UUID.randomUUID().toString());
+    }
+
+    @GetMapping("/storage/sent-media")
+    public ApiResponse<Page<UserStorageFileItemResponse>> getSentMedia(
+            @RequestParam(defaultValue = "ALL") String scope,
+            @RequestParam(defaultValue = "0") Integer page,
+            @RequestParam(defaultValue = "50") Integer size
+    ) {
+        return ApiResponse.ok(
+                userStorageService.getSentMedia(
+                        scope,
+                        page == null ? 0 : page,
+                        size == null ? 50 : size),
+                UUID.randomUUID().toString());
     }
 
     @PostMapping("/storage/cache/cleanup")

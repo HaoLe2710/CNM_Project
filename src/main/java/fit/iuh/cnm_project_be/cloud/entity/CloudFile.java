@@ -72,6 +72,24 @@ public class CloudFile {
     @Column(name = "checksum")
     private String checksum;
 
+    @Column(name = "manual_content", columnDefinition = "text")
+    private String manualContent;
+
+    @Column(name = "analysis_status")
+    private String analysisStatus;
+
+    @Column(name = "detected_disease")
+    private String detectedDisease;
+
+    @Column(name = "severity_level")
+    private String severityLevel;
+
+    @Column(name = "analysis_confidence")
+    private Double analysisConfidence;
+
+    @Column(name = "analyzed_at")
+    private Instant analyzedAt;
+
     @Column(name = "deleted_at")
     private Instant deletedAt;
 

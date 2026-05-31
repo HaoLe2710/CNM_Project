@@ -6,6 +6,7 @@ import fit.iuh.cnm_project_be.notification.dto.NotificationDispatchRequest;
 import fit.iuh.cnm_project_be.notification.enums.NotificationTargetType;
 import fit.iuh.cnm_project_be.notification.enums.NotificationType;
 import fit.iuh.cnm_project_be.notification.service.NotificationDispatcher;
+import fit.iuh.cnm_project_be.user.dto.response.FriendBirthdayResponse;
 import fit.iuh.cnm_project_be.user.dto.response.FriendRequestResponse;
 import fit.iuh.cnm_project_be.user.dto.response.FriendshipResponse;
 import fit.iuh.cnm_project_be.user.dto.response.UserSearchResponse;
@@ -26,6 +27,10 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
+import java.time.LocalDate;
+import java.time.MonthDay;
+import java.time.temporal.ChronoUnit;
+import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -203,6 +208,35 @@ public class FriendService {
 
         return mapFriendshipsToResponses(friendships);
     }
+
+    @Transactional(readOnly = true)
+    public List<FriendBirthdayResponse> getUpcomingBirthdays(int upcomingDays) {
+        UserProfile currentUser = userService.getMyProfile();
+        int normalizedDays = Math.min(Math.max(upcomingDays, 0), 366);
+        LocalDate today = LocalDate.now();
+        LocalDate maxDate = today.plusDays(normalizedDays);
+
+        List<Friendship> friendships = friendshipRepository
+                .findByUserIdAndDeletedAtIsNullOrderByCreatedAtDesc(currentUser.getUserId());
+        if (friendships.isEmpty()) {
+            return List.of();
+        }
+
+        List<UUID> friendIds = friendships.stream()
+                .map(Friendship::getFriendId)
+                .filter(Objects::nonNull)
+                .distinct()
+                .toList();
+
+        return userProfileRepository.findByUserIdInAndDeletedAtIsNull(friendIds)
+                .stream()
+                .filter(profile -> profile.getDob() != null)
+                .map(profile -> toBirthdayResponse(profile, today))
+                .filter(response -> !response.getNextBirthday().isAfter(maxDate))
+                .sorted(Comparator.comparing(FriendBirthdayResponse::getNextBirthday)
+                        .thenComparing(FriendBirthdayResponse::getDisplayName, String.CASE_INSENSITIVE_ORDER))
+                .toList();
+    }
 //    Giải quyết trạng thái quan hệ giữa 2 user
     private FriendRelationshipStatus resolveRelationshipStatus(UUID currentUserId, UUID targetUserId) {
         if (areFriends(currentUserId, targetUserId)) {
@@ -335,6 +369,28 @@ public class FriendService {
             return userProfile.getUsername();
         }
         return "Ai đó";
+    }
+
+    private FriendBirthdayResponse toBirthdayResponse(UserProfile profile, LocalDate today) {
+        LocalDate nextBirthday = resolveNextBirthday(profile.getDob(), today);
+        return FriendBirthdayResponse.builder()
+                .userId(profile.getUserId())
+                .displayName(displayName(profile))
+                .avatarUrl(profile.getAvatarUrl())
+                .birthDate(profile.getDob())
+                .nextBirthday(nextBirthday)
+                .daysUntil(ChronoUnit.DAYS.between(today, nextBirthday))
+                .ageTurning(nextBirthday.getYear() - profile.getDob().getYear())
+                .build();
+    }
+
+    private LocalDate resolveNextBirthday(LocalDate birthDate, LocalDate today) {
+        MonthDay birthday = MonthDay.from(birthDate);
+        LocalDate candidate = birthday.atYear(today.getYear());
+        if (candidate.isBefore(today)) {
+            candidate = birthday.atYear(today.getYear() + 1);
+        }
+        return candidate;
     }
 
     @Transactional
