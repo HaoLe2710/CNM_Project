@@ -656,6 +656,40 @@ class MessageServiceTest {
     }
 
     @Test
+    void searchMessagesReturnsVisibleMatchesWithSenderIdentity() {
+        UUID conversationId = UUID.randomUUID();
+        UUID currentUserId = UUID.randomUUID();
+        UUID senderId = UUID.randomUUID();
+
+        Message message = new Message();
+        message.setId(44L);
+        message.setConversationId(conversationId);
+        message.setSenderId(senderId);
+        message.setContent("meeting notes");
+        message.setMessageType(MessageType.TEXT);
+        message.setCreatedAt(Instant.parse("2026-06-01T00:00:00Z"));
+
+        when(messageRepository.searchVisibleMessages(eq(currentUserId), eq("meeting"), any()))
+                .thenReturn(List.of(message));
+        when(userProfileRepository.findAllById(any(Iterable.class)))
+                .thenReturn(List.of(activeUser(
+                        senderId,
+                        "sender.user",
+                        "Sender Name",
+                        "https://cdn.example.com/sender.png"
+                )));
+
+        var results = messageService.searchMessages(currentUserId, " meeting ", 200);
+
+        assertThat(results).hasSize(1);
+        assertThat(results.get(0).getMessageId()).isEqualTo(44L);
+        assertThat(results.get(0).getConversationId()).isEqualTo(conversationId);
+        assertThat(results.get(0).getSenderDisplayName()).isEqualTo("Sender Name");
+        assertThat(results.get(0).getContent()).isEqualTo("meeting notes");
+        verify(messageRepository).searchVisibleMessages(eq(currentUserId), eq("meeting"), any());
+    }
+
+    @Test
     void getMessagesReturnsConversationMemberReadStates() {
         UUID conversationId = UUID.randomUUID();
         UUID currentUserId = UUID.randomUUID();

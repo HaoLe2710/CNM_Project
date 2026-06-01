@@ -17,6 +17,7 @@ import fit.iuh.cnm_project_be.message.dto.MessageReactionRequest;
 import fit.iuh.cnm_project_be.message.dto.MessageReactionSummary;
 import fit.iuh.cnm_project_be.message.dto.MessageReadReceiptPayload;
 import fit.iuh.cnm_project_be.message.dto.MessageResponse;
+import fit.iuh.cnm_project_be.message.dto.MessageSearchResultResponse;
 import fit.iuh.cnm_project_be.message.dto.MessageStatusPayload;
 import fit.iuh.cnm_project_be.message.dto.ReplyInfo;
 import fit.iuh.cnm_project_be.message.dto.SendMessageRequest;
@@ -105,6 +106,7 @@ public class MessageService {
 
     private static final int DEFAULT_MESSAGE_PAGE_SIZE = 50;
     private static final int MAX_MESSAGE_PAGE_SIZE = 100;
+    private static final int MAX_MESSAGE_SEARCH_RESULTS = 100;
     private static final long MAX_AUDIO_DURATION_MS = 300_000L;
     private static final int MIN_WAVEFORM_SAMPLES = 16;
     private static final int MAX_WAVEFORM_SAMPLES = 128;
@@ -211,6 +213,41 @@ public class MessageService {
                 .hasMore(hasMore)
                 .memberReadStates(memberReadStates)
                 .build();
+    }
+
+    @Transactional(readOnly = true)
+    public List<MessageSearchResultResponse> searchMessages(UUID currentUserId, String keyword, int size) {
+        String normalizedKeyword = normalizeNullableText(keyword);
+        if (normalizedKeyword == null) {
+            return List.of();
+        }
+
+        int resultSize = Math.min(Math.max(size, 1), MAX_MESSAGE_SEARCH_RESULTS);
+        List<Message> messages = messageRepository.searchVisibleMessages(
+                currentUserId,
+                normalizedKeyword,
+                PageRequest.of(0, resultSize)
+        );
+        Map<UUID, UserProfile> profilesByUserId = loadUserProfilesByUserId(
+                messages.stream()
+                        .map(Message::getSenderId)
+                        .filter(Objects::nonNull)
+                        .collect(Collectors.toCollection(LinkedHashSet::new))
+        );
+
+        return messages.stream()
+                .map(message -> MessageSearchResultResponse.builder()
+                        .messageId(message.getId())
+                        .conversationId(message.getConversationId())
+                        .senderId(message.getSenderId())
+                        .senderDisplayName(resolveUserDisplayName(
+                                profilesByUserId.get(message.getSenderId()),
+                                message.getSenderId()
+                        ))
+                        .content(message.getContent())
+                        .createdAt(message.getCreatedAt())
+                        .build())
+                .toList();
     }
 
     @Transactional(readOnly = true)
