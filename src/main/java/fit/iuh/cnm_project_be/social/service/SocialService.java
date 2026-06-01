@@ -111,7 +111,7 @@ public class SocialService {
     public List<PostResponse> getFriendPostFeed(Integer size) {
         UUID currentUserId = currentUser().getUserId();
         return postRepository.findByDeletedAtIsNullAndArchivedAtIsNullOrderByCreatedAtDesc(
-                        PageRequest.of(0, normalizeFeedCandidateSize(size)))
+                PageRequest.of(0, normalizeFeedCandidateSize(size)))
                 .stream()
                 .filter(post -> canViewPost(post, currentUserId))
                 .limit(normalizeSize(size))
@@ -304,7 +304,8 @@ public class SocialService {
         PostInteractionScope scope = resolveInteractionScope(post, currentUserId);
         Set<UUID> visibleUserIds = resolveVisibleUserIds(post, currentUserId, scope);
 
-        List<PostComment> allComments = postCommentRepository.findByPostIdAndDeletedAtIsNullOrderByCreatedAtDesc(postId);
+        List<PostComment> allComments = postCommentRepository
+                .findByPostIdAndDeletedAtIsNullOrderByCreatedAtDesc(postId);
         List<PostComment> visibleComments = allComments.stream()
                 .filter(comment -> canSeeActor(comment.getUserId(), scope, visibleUserIds))
                 .toList();
@@ -319,7 +320,8 @@ public class SocialService {
         PostInteractionScope scope = resolveInteractionScope(post, currentUserId);
 
         List<PostLike> allLikes = postLikeRepository.findByPostIdOrderByCreatedAtDesc(postId);
-        List<PostComment> allComments = postCommentRepository.findByPostIdAndDeletedAtIsNullOrderByCreatedAtDesc(postId);
+        List<PostComment> allComments = postCommentRepository
+                .findByPostIdAndDeletedAtIsNullOrderByCreatedAtDesc(postId);
 
         Set<UUID> visibleUserIds = resolveVisibleUserIds(post, currentUserId, scope);
 
@@ -479,8 +481,7 @@ public class SocialService {
             List<Moment> friendVideos = new ArrayList<>(momentRepository.findByUserIdsAndMediaType(
                     friendIds,
                     MediaType.VIDEO,
-                    PageRequest.of(0, Math.min(limit * VIDEO_CANDIDATE_MULTIPLIER, MAX_PAGE_SIZE))
-            ));
+                    PageRequest.of(0, Math.min(limit * VIDEO_CANDIDATE_MULTIPLIER, MAX_PAGE_SIZE))));
             Collections.shuffle(friendVideos);
             for (Moment moment : friendVideos) {
                 if (selected.size() >= limit) {
@@ -495,12 +496,12 @@ public class SocialService {
         if (selected.size() < limit) {
             int remaining = limit - selected.size();
             List<Moment> fallbackVideos = selectedIds.isEmpty()
-                    ? new ArrayList<>(momentRepository.findByMediaType(MediaType.VIDEO, PageRequest.of(0, MAX_PAGE_SIZE)))
+                    ? new ArrayList<>(
+                            momentRepository.findByMediaType(MediaType.VIDEO, PageRequest.of(0, MAX_PAGE_SIZE)))
                     : new ArrayList<>(momentRepository.findByMediaTypeExcludingIds(
                             MediaType.VIDEO,
                             selectedIds,
-                            PageRequest.of(0, MAX_PAGE_SIZE)
-                    ));
+                            PageRequest.of(0, MAX_PAGE_SIZE)));
             Collections.shuffle(fallbackVideos);
             for (Moment moment : fallbackVideos) {
                 if (remaining == 0) {
@@ -734,7 +735,8 @@ public class SocialService {
                 .user(toUserSummary(user))
                 .content(postComment.getContent())
                 .likeCount(postCommentLikeRepository.countByCommentId(postComment.getId()))
-                .likedByCurrentUser(postCommentLikeRepository.existsByCommentIdAndUserId(postComment.getId(), currentUserId))
+                .likedByCurrentUser(
+                        postCommentLikeRepository.existsByCommentIdAndUserId(postComment.getId(), currentUserId))
                 .createdAt(postComment.getCreatedAt())
                 .updatedAt(postComment.getUpdatedAt())
                 .replies(replies)
@@ -795,7 +797,8 @@ public class SocialService {
                 .toList();
     }
 
-    private void syncPostAudience(Post post, UUID currentUserId, List<UUID> allowedViewerIds, List<UUID> taggedFriendIds) {
+    private void syncPostAudience(Post post, UUID currentUserId, List<UUID> allowedViewerIds,
+            List<UUID> taggedFriendIds) {
         validateVisibilityRequest(post.getVisibilityMode(), allowedViewerIds);
 
         Set<UUID> friendIds = new HashSet<>(getFriendIds(currentUserId));
@@ -830,7 +833,8 @@ public class SocialService {
         if (visibilityMode == null) {
             throw new BusinessException("Visibility mode is required");
         }
-        if (visibilityMode == PostVisibilityMode.ALL_FRIENDS && allowedViewerIds != null && !allowedViewerIds.isEmpty()) {
+        if (visibilityMode == PostVisibilityMode.ALL_FRIENDS && allowedViewerIds != null
+                && !allowedViewerIds.isEmpty()) {
             throw new BusinessException("Allowed viewers are only supported for selected-friends visibility");
         }
     }
@@ -1130,8 +1134,7 @@ public class SocialService {
                 .map(comment -> toPostCommentResponse(
                         comment,
                         currentUserId,
-                        buildCommentTree(comments, comment.getId(), currentUserId)
-                ))
+                        buildCommentTree(comments, comment.getId(), currentUserId)))
                 .toList();
     }
 
