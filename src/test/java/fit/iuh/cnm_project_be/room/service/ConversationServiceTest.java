@@ -21,6 +21,7 @@ import fit.iuh.cnm_project_be.room.repository.ConversationMemberRepository;
 import fit.iuh.cnm_project_be.room.repository.ConversationRepository;
 import fit.iuh.cnm_project_be.room.repository.ConversationUserSettingRepository;
 import fit.iuh.cnm_project_be.user.entity.UserProfile;
+import fit.iuh.cnm_project_be.user.repository.UserBlockRepository;
 import fit.iuh.cnm_project_be.user.repository.UserProfileRepository;
 import fit.iuh.cnm_project_be.message.repository.MessageRepository;
 import fit.iuh.cnm_project_be.message.repository.MessageStatusRepository;
@@ -66,6 +67,8 @@ class ConversationServiceTest {
     private MessageStatusRepository messageStatusRepository;
     @Mock
     private MessageUserStateRepository messageUserStateRepository;
+    @Mock
+    private UserBlockRepository userBlockRepository;
     @Mock
     private UserProfileRepository userProfileRepository;
     @Mock

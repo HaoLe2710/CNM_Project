@@ -9,6 +9,7 @@ import fit.iuh.cnm_project_be.message.dto.MessageContextResponse;
 import fit.iuh.cnm_project_be.message.dto.PinMessageRequest;
 import fit.iuh.cnm_project_be.message.dto.MessageReactionRequest;
 import fit.iuh.cnm_project_be.message.dto.MessageResponse;
+import fit.iuh.cnm_project_be.message.dto.MessageSearchResultResponse;
 import fit.iuh.cnm_project_be.message.dto.SendMessageRequest;
 import fit.iuh.cnm_project_be.message.dto.TypingRealtimePayload;
 import fit.iuh.cnm_project_be.message.dto.UploadAttachmentResponse;
@@ -25,6 +26,7 @@ import org.springframework.web.multipart.MultipartFile;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.UUID;
+import java.util.List;
 
 @RestController
 @RequestMapping("/api/v1/messages")
@@ -49,6 +51,17 @@ public class MessageController {
             @RequestParam(defaultValue = "50") int size,
             @RequestHeader("x-user-id") UUID currentUserId) {
         return ApiResponse.ok(messageService.getMessages(conversationId, currentUserId, cursor, size), UUID.randomUUID().toString());
+    }
+
+    @GetMapping("/search")
+    public ApiResponse<List<MessageSearchResultResponse>> searchMessages(
+            @RequestParam("q") String keyword,
+            @RequestParam(defaultValue = "100") int size,
+            @RequestHeader("x-user-id") UUID currentUserId) {
+        return ApiResponse.ok(
+                messageService.searchMessages(currentUserId, keyword, size),
+                UUID.randomUUID().toString()
+        );
     }
 
     @GetMapping("/{conversationId}/context")

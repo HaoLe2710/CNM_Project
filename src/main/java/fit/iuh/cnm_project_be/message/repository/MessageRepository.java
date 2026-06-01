@@ -57,6 +57,28 @@ public interface MessageRepository extends SoftDeleteRepository<Message, Long> {
 
         @Query("""
                         select m from Message m
+                        where m.deletedAt is null
+                          and lower(coalesce(m.content, '')) like lower(concat('%', :keyword, '%'))
+                          and exists (
+                                select 1 from ConversationMember member
+                                where member.conversationId = m.conversationId
+                                  and member.userId = :userId
+                          )
+                          and not exists (
+                                select 1 from MessageUserState state
+                                where state.messageId = m.id
+                                  and state.userId = :userId
+                                  and (state.hiddenAt is not null or state.deletedForMeAt is not null)
+                          )
+                        order by m.createdAt desc, m.id desc
+                        """)
+        List<Message> searchVisibleMessages(
+                        @Param("userId") UUID userId,
+                        @Param("keyword") String keyword,
+                        Pageable pageable);
+
+        @Query("""
+                        select m from Message m
                         where m.conversationId = :conversationId
                           and m.deletedAt is null
                           and not exists (
