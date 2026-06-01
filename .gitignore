@@ -43,7 +43,6 @@ build/
 ############################
 .env
 .env.*
-src/main/resources/application.properties
 
 ############################
 # Docker

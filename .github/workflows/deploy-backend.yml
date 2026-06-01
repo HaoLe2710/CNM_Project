@@ -1,0 +1,183 @@
+name: Deploy Backend
+
+on:
+  push:
+    branches:
+      - deployment
+
+concurrency:
+  group: deploy-backend-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  REGISTRY: docker.io
+  IMAGE_NAME: ${{ secrets.DOCKER_USERNAME }}/cnm-backend
+  REMOTE_APP_DIR: ${{ vars.EC2_BACKEND_DEPLOY_DIR || '~/cnm/deploy/backend' }}
+  HEALTHCHECK_URL: ${{ vars.BACKEND_HEALTHCHECK_URL }}
+
+jobs:
+  deploy:
+    name: Build, Push, and Deploy
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Docker registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+
+      - name: Generate Docker image metadata
+        id: meta
+        run: |
+          set -euo pipefail
+          IMAGE="${REGISTRY}/${IMAGE_NAME}"
+          SHORT_SHA="${GITHUB_SHA::12}"
+
+          echo "image=${IMAGE}" >> "$GITHUB_OUTPUT"
+          echo "sha_tag=${IMAGE}:${SHORT_SHA}" >> "$GITHUB_OUTPUT"
+          echo "latest_tag=${IMAGE}:latest" >> "$GITHUB_OUTPUT"
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          tags: |
+            ${{ steps.meta.outputs.sha_tag }}
+            ${{ steps.meta.outputs.latest_tag }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Configure SSH
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+
+          cat > ~/.ssh/ec2_backend_key <<'EOF'
+          ${{ secrets.EC2_SSH_PRIVATE_KEY }}
+          EOF
+          sed -i 's/^[[:space:]]*//' ~/.ssh/ec2_backend_key
+          sed -i 's/\r$//' ~/.ssh/ec2_backend_key
+          chmod 600 ~/.ssh/ec2_backend_key
+
+          ssh-keyscan -H "${{ secrets.EC2_HOST }}" >> ~/.ssh/known_hosts
+
+      - name: Deploy on EC2
+        env:
+          EC2_USER: ${{ secrets.EC2_USER }}
+          EC2_HOST: ${{ secrets.EC2_HOST }}
+          DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
+          DOCKER_PASSWORD: ${{ secrets.DOCKER_PASSWORD }}
+          DEPLOY_IMAGE: ${{ steps.meta.outputs.sha_tag }}
+        run: |
+          set -euo pipefail
+
+          ssh -i ~/.ssh/ec2_backend_key "${EC2_USER}@${EC2_HOST}" \
+            "REGISTRY='${REGISTRY}' \
+             DOCKER_USERNAME='${DOCKER_USERNAME}' \
+             DOCKER_PASSWORD='${DOCKER_PASSWORD}' \
+             DEPLOY_IMAGE='${DEPLOY_IMAGE}' \
+             REMOTE_APP_DIR='${REMOTE_APP_DIR}' \
+             HEALTHCHECK_URL='${HEALTHCHECK_URL}' \
+             bash -s" <<'REMOTE_SCRIPT'
+          set -euo pipefail
+
+          cd "${REMOTE_APP_DIR}"
+
+          if [ -f docker-compose.backend.yml ]; then
+            COMPOSE_FILE="docker-compose.backend.yml"
+          elif [ -f docker-compose.yml ]; then
+            COMPOSE_FILE="docker-compose.yml"
+          else
+            echo "No docker-compose.backend.yml or docker-compose.yml found in ${REMOTE_APP_DIR}" >&2
+            exit 1
+          fi
+
+          if [ ! -f .env ]; then
+            echo "Missing .env in ${REMOTE_APP_DIR}" >&2
+            exit 1
+          fi
+
+          echo "${DOCKER_PASSWORD}" | docker login "${REGISTRY}" -u "${DOCKER_USERNAME}" --password-stdin >/dev/null
+
+          export BACKEND_IMAGE="${DEPLOY_IMAGE}"
+
+          docker compose --env-file .env -f "${COMPOSE_FILE}" pull backend
+          docker compose --env-file .env -f "${COMPOSE_FILE}" up -d --remove-orphans backend
+
+          echo "Waiting for backend container to start..."
+          sleep 10
+
+          docker compose --env-file .env -f "${COMPOSE_FILE}" ps backend
+
+          if docker compose --env-file .env -f "${COMPOSE_FILE}" exec -T backend test -r /run/secrets/firebase/firebase-service-account.json; then
+            echo "Firebase service account secret is mounted."
+          else
+            echo "Firebase service account secret is not mounted at /run/secrets/firebase/firebase-service-account.json" >&2
+            exit 1
+          fi
+
+          if docker compose --env-file .env -f "${COMPOSE_FILE}" exec -T backend test -r /run/secrets/cnm/private_key.pem; then
+            echo "JWT private key secret is mounted at /run/secrets/cnm/private_key.pem."
+          elif docker compose --env-file .env -f "${COMPOSE_FILE}" exec -T backend test -r /run/secrets/auth/private_key.pem; then
+            echo "JWT private key secret is mounted at /run/secrets/auth/private_key.pem."
+          else
+            echo "JWT private key secret is not mounted." >&2
+            exit 1
+          fi
+
+          if docker compose --env-file .env -f "${COMPOSE_FILE}" exec -T backend test -r /run/secrets/cnm/public_key.pem; then
+            echo "JWT public key secret is mounted at /run/secrets/cnm/public_key.pem."
+          elif docker compose --env-file .env -f "${COMPOSE_FILE}" exec -T backend test -r /run/secrets/auth/public_key.pem; then
+            echo "JWT public key secret is mounted at /run/secrets/auth/public_key.pem."
+          else
+            echo "JWT public key secret is not mounted." >&2
+            exit 1
+          fi
+
+          if [ -n "${HEALTHCHECK_URL}" ]; then
+            echo "Checking backend health: ${HEALTHCHECK_URL}"
+            for i in $(seq 1 30); do
+              if curl -fsS "${HEALTHCHECK_URL}" >/dev/null; then
+                echo "Backend health check passed."
+                exit 0
+              fi
+              sleep 2
+            done
+
+            echo "Backend health check failed." >&2
+            docker compose --env-file .env -f "${COMPOSE_FILE}" logs --tail=200 backend >&2
+            exit 1
+          fi
+
+          echo "No BACKEND_HEALTHCHECK_URL configured; skipping HTTP health check."
+          REMOTE_SCRIPT
+
+      - name: Notify Slack on failure
+        if: failure()
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${SLACK_WEBHOOK_URL}" ]; then
+            echo "No SLACK_WEBHOOK_URL configured; skipping failure notification."
+            exit 0
+          fi
+
+          curl -fsS -X POST \
+            -H "Content-Type: application/json" \
+            --data "{\"text\":\"Backend deployment failed for ${GITHUB_REPOSITORY}@${GITHUB_SHA}. Run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}\"}" \
+            "${SLACK_WEBHOOK_URL}" >/dev/null
