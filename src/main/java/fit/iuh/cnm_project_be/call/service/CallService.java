@@ -81,7 +81,7 @@ public class CallService {
         this.notificationDispatcher = notificationDispatcher;
     }
 
-    @Value("${app.sfu.url}")
+    @Value("${app.sfu.url:${SFU_URL:${APP_SFU_URL:http://localhost:4443}}}")
     private String sfuUrl;
 
     /**

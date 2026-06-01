@@ -13,7 +13,7 @@ import org.springframework.stereotype.Service;
 public class FCMService {
 
     // @Value("${sfu.url}")
-    @Value("${app.sfu.url}")
+    @Value("${app.sfu.url:${SFU_URL:${APP_SFU_URL:http://localhost:4443}}}")
     private String sfuUrl;
 
     public void sendCallNotification(String fcmToken, String callerName,
