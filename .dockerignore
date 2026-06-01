@@ -8,6 +8,10 @@ target/
 # Secrets and local env files
 .env
 .env.*
+src/main/resources/firebase-service-account.json
+src/main/resources/certs/public_key.pem
+src/main/resources/certs/private_key.pem
+src/main/resources/certs/priviate_key.pem
 
 # Logs and temp files
 *.log
