@@ -45,6 +45,8 @@ import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.security.interfaces.RSAPrivateKey;
 import java.security.interfaces.RSAPublicKey;
 import java.util.ArrayList;
@@ -68,6 +70,12 @@ public class SecurityConfig {
 
     @Value("${app.cors.allowed-origins:${APP_CORS_ALLOWED_ORIGINS:" + DEFAULT_ALLOWED_ORIGINS + "}}")
     private String corsAllowedOriginsRaw;
+
+    @Value("${app.jwt.private-key-path:${APP_JWT_PRIVATE_KEY_PATH:}}")
+    private String jwtPrivateKeyPath;
+
+    @Value("${app.jwt.public-key-path:${APP_JWT_PUBLIC_KEY_PATH:}}")
+    private String jwtPublicKeyPath;
 
     @Bean
     public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
@@ -115,8 +123,8 @@ public class SecurityConfig {
     // file pem lai
     @Bean
     public RSAKey rsaJwk() throws IOException, JOSEException {
-        String privatePem = readPem(PRIVATE_KEY_PATH);
-        String publicPem = readPem(PUBLIC_KEY_PATH);
+        String privatePem = readPem(jwtPrivateKeyPath, PRIVATE_KEY_PATH);
+        String publicPem = readPem(jwtPublicKeyPath, PUBLIC_KEY_PATH);
 
         RSAKey privateRsa = (RSAKey) JWK.parseFromPEMEncodedObjects(privatePem);
         RSAKey publicRsa = (RSAKey) JWK.parseFromPEMEncodedObjects(publicPem);
@@ -163,8 +171,12 @@ public class SecurityConfig {
         return new BCryptPasswordEncoder();
     }
 
-    // doc file pem
-    private String readPem(String classpathFile) throws IOException {
+    // doc file pem tu mounted secret path neu co, fallback classpath cho local/dev
+    private String readPem(String filePath, String classpathFile) throws IOException {
+        if (filePath != null && !filePath.isBlank()) {
+            return Files.readString(Path.of(filePath.trim()), StandardCharsets.UTF_8);
+        }
+
         try (InputStream inputStream = new ClassPathResource(classpathFile).getInputStream()) {
             return StreamUtils.copyToString(inputStream, StandardCharsets.UTF_8);
         }
