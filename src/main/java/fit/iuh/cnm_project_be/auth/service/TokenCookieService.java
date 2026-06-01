@@ -1,9 +1,7 @@
 package fit.iuh.cnm_project_be.auth.service;
 
-import lombok.AccessLevel;
-import lombok.AllArgsConstructor;
-import lombok.experimental.FieldDefaults;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.ResponseCookie;
 import org.springframework.stereotype.Service;
@@ -20,10 +18,13 @@ import java.time.Duration;
  * - Trích xuất token từ cookie
  */
 @Service
-@FieldDefaults(level = AccessLevel.PRIVATE, makeFinal = true)
-@AllArgsConstructor
 @Slf4j
 public class TokenCookieService {
+    @Value("${app.auth.cookie.secure:${APP_AUTH_COOKIE_SECURE:false}}")
+    private boolean cookieSecure;
+
+    @Value("${app.auth.cookie.same-site:${APP_AUTH_COOKIE_SAME_SITE:Strict}}")
+    private String cookieSameSite;
 
     /**
      * Set token vào HTTP Cookie với httpOnly + sameSite protection
@@ -36,8 +37,8 @@ public class TokenCookieService {
     ) {
         ResponseCookie cookie = ResponseCookie.from(cookieName, token)
                 .httpOnly(true)
-                .secure(false) // Set to true when using HTTPS
-                .sameSite("Strict")
+                .secure(resolveSecureFlag())
+                .sameSite(resolveSameSite())
                 .path("/")
                 .maxAge(maxAge)
                 .build();
@@ -54,12 +55,16 @@ public class TokenCookieService {
                 .path("/")
                 .maxAge(0)
                 .httpOnly(true)
+                .secure(resolveSecureFlag())
+                .sameSite(resolveSameSite())
                 .build();
 
         ResponseCookie rtCookie = ResponseCookie.from("refreshToken", "")
                 .path("/")
                 .maxAge(0)
                 .httpOnly(true)
+                .secure(resolveSecureFlag())
+                .sameSite(resolveSameSite())
                 .build();
 
         response.addHeader(HttpHeaders.SET_COOKIE, atCookie.toString());
@@ -93,5 +98,29 @@ public class TokenCookieService {
      */
     public String getRefreshTokenFromCookie(HttpServletRequest request) {
         return getCookieValue(request, "refreshToken");
+    }
+
+    private boolean resolveSecureFlag() {
+        return cookieSecure || "None".equalsIgnoreCase(resolveSameSite());
+    }
+
+    private String resolveSameSite() {
+        if (cookieSameSite == null || cookieSameSite.isBlank()) {
+            return "Strict";
+        }
+
+        String normalized = cookieSameSite.trim();
+        if ("None".equalsIgnoreCase(normalized)) {
+            return "None";
+        }
+        if ("Lax".equalsIgnoreCase(normalized)) {
+            return "Lax";
+        }
+        if ("Strict".equalsIgnoreCase(normalized)) {
+            return "Strict";
+        }
+
+        log.warn("[TokenCookie] - Invalid SameSite value '{}', fallback to Strict", cookieSameSite);
+        return "Strict";
     }
 }
