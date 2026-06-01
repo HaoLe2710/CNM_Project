@@ -94,6 +94,11 @@ jobs:
              bash -s" <<'REMOTE_SCRIPT'
           set -euo pipefail
 
+          case "${REMOTE_APP_DIR}" in
+            "~") REMOTE_APP_DIR="${HOME}" ;;
+            "~/"*) REMOTE_APP_DIR="${HOME}/${REMOTE_APP_DIR#~/}" ;;
+          esac
+
           cd "${REMOTE_APP_DIR}"
 
           if [ -f docker-compose.backend.yml ]; then
