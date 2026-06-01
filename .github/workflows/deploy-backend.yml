@@ -96,7 +96,7 @@ jobs:
 
           case "${REMOTE_APP_DIR}" in
             "~") REMOTE_APP_DIR="${HOME}" ;;
-            "~/"*) REMOTE_APP_DIR="${HOME}/${REMOTE_APP_DIR#~/}" ;;
+            "~/"*) REMOTE_APP_DIR="${HOME}/${REMOTE_APP_DIR:2}" ;;
           esac
 
           cd "${REMOTE_APP_DIR}"
