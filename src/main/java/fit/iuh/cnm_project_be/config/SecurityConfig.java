@@ -16,6 +16,7 @@ import fit.iuh.cnm_project_be.user.enums.Platform;
 import fit.iuh.cnm_project_be.user.repository.UserProfileRepository;
 import fit.iuh.cnm_project_be.user.repository.UserDeviceRepository;
 import jakarta.servlet.http.Cookie;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.CommandLineRunner;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -47,6 +48,7 @@ import java.nio.charset.StandardCharsets;
 import java.security.interfaces.RSAPrivateKey;
 import java.security.interfaces.RSAPublicKey;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.UUID;
 
@@ -55,6 +57,7 @@ import java.util.UUID;
 public class SecurityConfig {
     private static final String PRIVATE_KEY_PATH = "certs/private_key.pem";
     private static final String PUBLIC_KEY_PATH = "certs/public_key.pem";
+    private static final String DEFAULT_ALLOWED_ORIGINS = "http://localhost:5173,http://localhost:3000";
 
     private static final String[] PUBLIC_END_POINT = {
             "/api/v1/test/**",
@@ -62,6 +65,9 @@ public class SecurityConfig {
             "/ws/**",
             "/auth/ws/**",
     };
+
+    @Value("${app.cors.allowed-origins:${APP_CORS_ALLOWED_ORIGINS:" + DEFAULT_ALLOWED_ORIGINS + "}}")
+    private String corsAllowedOriginsRaw;
 
     @Bean
     public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
@@ -219,16 +225,14 @@ public class SecurityConfig {
 
     @Bean
     public WebMvcConfigurer corsConfigurer() {
+        String[] allowedOrigins = parseAllowedOrigins(corsAllowedOriginsRaw);
+
         return new WebMvcConfigurer() {
             @Override
             public void addCorsMappings(CorsRegistry registry) {
                 // Thêm CORS cho API
                 registry.addMapping("/api/**")
-                        .allowedOriginPatterns(
-                                "http://localhost:*",
-                                "http://127.0.0.1:*",
-                                "http://192.168.*:*",
-                                "http://10.*:*")
+                        .allowedOrigins(allowedOrigins)
                         .allowedMethods("GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH")
                         .allowedHeaders("*")
                         .allowCredentials(true)
@@ -236,27 +240,31 @@ public class SecurityConfig {
 
                 // Thêm CORS cho WebSocket endpoints (cần cho SockJS handshake)
                 registry.addMapping("/ws/**")
-                        .allowedOriginPatterns(
-                                "http://localhost:*",
-                                "http://127.0.0.1:*",
-                                "http://192.168.*:*",
-                                "http://10.*:*")
+                        .allowedOrigins(allowedOrigins)
                         .allowedMethods("GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH")
                         .allowedHeaders("*")
                         .allowCredentials(true)
                         .maxAge(3600);
 
                 registry.addMapping("/auth/ws/**")
-                        .allowedOriginPatterns(
-                                "http://localhost:*",
-                                "http://127.0.0.1:*",
-                                "http://192.168.*:*",
-                                "http://10.*:*")
+                        .allowedOrigins(allowedOrigins)
                         .allowedMethods("GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH")
                         .allowedHeaders("*")
                         .allowCredentials(true)
                         .maxAge(3600);
             }
         };
+    }
+
+    private String[] parseAllowedOrigins(String rawOrigins) {
+        String source = rawOrigins;
+        if (source == null || source.isBlank()) {
+            source = DEFAULT_ALLOWED_ORIGINS;
+        }
+
+        return Arrays.stream(source.split(","))
+                .map(String::trim)
+                .filter(origin -> !origin.isEmpty())
+                .toArray(String[]::new);
     }
 }

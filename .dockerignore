@@ -1,0 +1,27 @@
+target/
+.git/
+.github/
+.idea/
+.vscode/
+*.iml
+
+# Secrets and local env files
+.env
+.env.*
+
+# Logs and temp files
+*.log
+logs/
+*.tmp
+*.swp
+
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Node artifacts (if any)
+node_modules/
+
+# Build caches
+.mvn/wrapper/maven-wrapper.jar.lastUpdated
