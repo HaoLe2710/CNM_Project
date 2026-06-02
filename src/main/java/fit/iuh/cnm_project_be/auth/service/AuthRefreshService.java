@@ -35,7 +35,6 @@ public class AuthRefreshService {
     JwtUtils jwtUtils;
     TokenCookieService tokenCookieService;
     TokenRedisService tokenRedisService;
-    LogoutService logoutService;
 
     @Transactional
     public RefreshTokenResponse refreshAccessToken(HttpServletRequest request, HttpServletResponse response) {
@@ -64,9 +63,9 @@ public class AuthRefreshService {
                     .build();
 
         } catch (UnauthorizedException ex) {
-            // Refresh token hết hạn hoặc invalid -> đăng xuất ngay lập tức
+            // Do not clear cookies here: a stale refresh request can race with a
+            // successful login response and wipe the newly issued auth cookies.
             log.warn("[AuthRefresh] - Refresh token invalid/expired: {}", ex.getMessage());
-            logoutService.logout(request, response);
             throw new UnauthorizedException("Refresh token expired. Please login again.");
         }
     }
